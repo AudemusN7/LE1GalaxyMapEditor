@@ -140,10 +140,10 @@ internal static class Program
         Equal(CsvGalaxyMapLoader.BuiltInSourceName, document.SourceFolder, "built-in source description");
         True(document.IsSourceReadOnly, "built-in source is read-only");
         Equal(17, document.Clusters.Count, "built-in Cluster count");
-        Equal(43, document.Systems.Count, "built-in System count");
-        Equal(233, document.Planets.Count, "built-in Planet count");
-        Equal(6, document.PlotPlanets.Count, "built-in PlotPlanet count");
-        Equal(106, document.Maps.Count, "built-in Map count");
+        Equal(44, document.Systems.Count, "built-in System count");
+        Equal(240, document.Planets.Count, "built-in Planet count");
+        Equal(7, document.PlotPlanets.Count, "built-in PlotPlanet count");
+        Equal(107, document.Maps.Count, "built-in Map count");
         Equal(17, document.Relays.Count, "built-in Relay count");
         Equal(16, document.Relays.Count(relay => relay.IsResolved), "built-in resolved Relay count");
         Equal("BIOA_GalaxyMap_T.Cluster03", document.ClustersByRowId[1].Background,
@@ -154,11 +154,11 @@ internal static class Program
         var expectedHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["GalaxyMap_Cluster.csv"] = "7BB1FEDCF4E3A5D0B7B86BF99427144F44B567821D42B37203EA452BF079C129",
-            ["GalaxyMap_Map.csv"] = "517BCE5E4979269A8A74D731A329DAA8CB6BBB63FCEC3E4A06C270C4F4BEEA0D",
-            ["GalaxyMap_Planet.csv"] = "AE9BCBDF6F8810EF3AB777CD511E304F495A133DF6777112EBBBB8DA377A2AA5",
-            ["GalaxyMap_PlotPlanet.csv"] = "F85D0F1598FBD5BD3CFE103588071088A206226FE22673FBC33C60C79C510C24",
+            ["GalaxyMap_Map.csv"] = "CD0405C1CB81D47FEC06B8153377619524FB23C55938D4A41481376877BE185C",
+            ["GalaxyMap_Planet.csv"] = "292BA5BFB9197AAE150F22CF50CCC6CE4357AB8640F0864875A7588C55A58DD8",
+            ["GalaxyMap_PlotPlanet.csv"] = "B24DF58848024E37A72614DF932FF1C9992FCAC7CB79446BC76A2CD32F8A94B8",
             ["GalaxyMap_Relay.csv"] = "5FE5B6B706D7DA1DD250C483962C07559C97D9E5726F406F06BE4DF2471CB373",
-            ["GalaxyMap_System.csv"] = "2D9C9ADBEEEB4FBFBD176F84C7B43E1D8003D259128D2008863425FB84F47226"
+            ["GalaxyMap_System.csv"] = "10E988BB1F96D22D7226CA9CBB17FEA5EA03A3D517CCDD64FF4872614C18249A"
         };
         foreach (var (fileName, expectedHash) in expectedHashes)
         {
