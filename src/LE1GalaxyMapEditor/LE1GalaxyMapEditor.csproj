@@ -1,0 +1,32 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>resources\branding\icon.ico</ApplicationIcon>
+    <AssemblyName>LE1GalaxyMapEditor</AssemblyName>
+    <RootNamespace>LE1GalaxyMapEditor</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Large, replaceable map assets remain beside the executable instead of
+         inflating the assembly and antivirus scan surface. -->
+    <None Update="resources\data\*.csv"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Update="resources\textures\*.jpg"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Update="resources\textures\*.png"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+
+    <!-- Branding is small and is needed before external resources are checked. -->
+    <Resource Include="resources\branding\*.png" />
+    <Resource Include="resources\branding\*.ico" />
+  </ItemGroup>
+
+</Project>

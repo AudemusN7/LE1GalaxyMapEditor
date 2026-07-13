@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LE1GalaxyMapEditor\LE1GalaxyMapEditor.csproj" />
+    <!-- Project-reference content is not copied transitively. Mirror the deployed
+         resource layout so headless tests exercise the same external-file path as
+         the installed application. -->
+    <None Include="..\..\src\LE1GalaxyMapEditor\resources\data\*.csv"
+          Link="resources\data\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\LE1GalaxyMapEditor\resources\textures\*.jpg"
+          Link="resources\textures\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\LE1GalaxyMapEditor\resources\textures\*.png"
+          Link="resources\textures\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
