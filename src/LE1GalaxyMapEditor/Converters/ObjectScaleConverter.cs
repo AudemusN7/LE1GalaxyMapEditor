@@ -3,10 +3,11 @@ using System.Windows.Data;
 
 namespace LE1GalaxyMapEditor.Converters;
 
-public sealed class ObjectScaleConverter : IValueConverter
+public sealed class ObjectScaleConverter : IValueConverter, IMultiValueConverter
 {
     public const double MinimumSourceScale = 0.5d;
     public const double MaximumSourceScale = 8d;
+    public const double ReferenceViewportExtent = 760d;
 
     public static double Calculate(double sourceScale)
     {
@@ -19,9 +20,25 @@ public sealed class ObjectScaleConverter : IValueConverter
                (0.10416666666666667d * logarithmicScale * logarithmicScale);
     }
 
+    public static double Calculate(double sourceScale, double viewportExtent)
+    {
+        var viewportFactor = double.IsFinite(viewportExtent) && viewportExtent > 0
+            ? Math.Clamp(viewportExtent / ReferenceViewportExtent, 0.5d, 1d)
+            : 1d;
+        return Calculate(sourceScale) * viewportFactor;
+    }
+
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         => value is double scale ? Calculate(scale) : 1d;
 
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+        => values is [double scale, double viewportExtent, ..]
+            ? Calculate(scale, viewportExtent)
+            : 1d;
+
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
         => throw new NotSupportedException();
 }

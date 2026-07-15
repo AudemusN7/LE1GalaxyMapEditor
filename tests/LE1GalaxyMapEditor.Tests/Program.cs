@@ -16,6 +16,10 @@ using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Services;
 using LE1GalaxyMapEditor.ViewModels;
 using LE1GalaxyMapEditor.Views;
+using LE1GalaxyMapEditor.Workflows;
+using LE1GalaxyMapEditor.Workflows.Editing;
+using LE1GalaxyMapEditor.Workflows.Ports;
+using LE1GalaxyMapEditor.Workflows.Queries;
 
 namespace LE1GalaxyMapEditor.Tests;
 
@@ -33,7 +37,7 @@ internal static class Program
         Run("Compact map-number formatting", CompactMapNumberFormatting);
         Run("Planet appearance columns are categorized", PlanetAppearanceColumnsAreCategorized);
         Run("Asteroid belts use a distinct visual", AsteroidBeltsUseDistinctVisual);
-        Run("Object scale uses the compressed visual curve", ObjectScaleUsesCompressedCurve);
+        Run("Map markers preserve object scale while resizing", MapMarkersPreserveObjectScaleWhileResizing);
         Run("Planet templates use verified structural defaults", PlanetTemplateDefaults);
         Run("Inspector metadata and type ranges", InspectorMetadataAndTypeRanges);
         Run("Square viewport and coordinate grid definitions", SquareViewportAndGridDefinitions);
@@ -64,6 +68,8 @@ internal static class Program
         Run("Special property editors and packed colours", SpecialPropertyEditorsAndColors);
         Run("Structured validation errors and warnings", StructuredValidationErrorsAndWarnings);
         OptimizationRegressionTests.Register(Run);
+        Run("Refactor: edit transaction rollback and history contract", EditTransactionRollbackAndHistoryContract);
+        Run("Refactor: merged table projection follows the editor session", TableProjectionFollowsEditorSession);
 
         var realFolder = ReadArgument(args, "--real") ?? Environment.GetEnvironmentVariable("LE1_GALAXYMAP_CSV_FOLDER");
         if (!string.IsNullOrWhiteSpace(realFolder))
@@ -215,6 +221,10 @@ internal static class Program
             NearlyEqual(0.75, cluster.X, "invalid text does not corrupt model");
             True(x.HasError, "invalid edit is identified");
 
+            x.Value = "1.01";
+            NearlyEqual(0.75, cluster.X, "off-canvas coordinate does not corrupt model");
+            True(x.HasError, "coordinates outside 0-1 are rejected inline");
+
             var extra = inspector.Sections.Single(section => section.Title == "Advanced Cluster fields")
                 .Fields.Single(field => field.Name == "ExtraCluster");
             extra.Value = "changed only in memory";
@@ -291,7 +301,7 @@ internal static class Program
         });
     }
 
-    private static void ObjectScaleUsesCompressedCurve()
+    private static void MapMarkersPreserveObjectScaleWhileResizing()
     {
         NearlyEqual(0.75, ObjectScaleConverter.Calculate(0), "zero scale clamps to the visible minimum");
         NearlyEqual(0.75, ObjectScaleConverter.Calculate(0.5), "minimum scale displays at three-quarter size");
@@ -299,7 +309,18 @@ internal static class Program
         NearlyEqual(3, ObjectScaleConverter.Calculate(8), "maximum scale displays at triple size");
         NearlyEqual(3, ObjectScaleConverter.Calculate(80), "oversized values clamp to the visual maximum");
         True(ObjectScaleConverter.Calculate(2) > 1 && ObjectScaleConverter.Calculate(2) < 2,
-            "intermediate scale is compressed rather than linear");
+            "intermediate object scale remains compressed rather than linear");
+
+        var smallDefault = ObjectScaleConverter.Calculate(1, 380);
+        var smallLargeObject = ObjectScaleConverter.Calculate(4, 380);
+        var referenceDefault = ObjectScaleConverter.Calculate(1, ObjectScaleConverter.ReferenceViewportExtent);
+        var referenceLargeObject = ObjectScaleConverter.Calculate(4, ObjectScaleConverter.ReferenceViewportExtent);
+        NearlyEqual(0.5, smallDefault, "small viewport uniformly reduces marker size");
+        NearlyEqual(referenceLargeObject / referenceDefault, smallLargeObject / smallDefault,
+            "viewport resizing preserves the relative object-scale ratio");
+        NearlyEqual(referenceLargeObject,
+            ObjectScaleConverter.Calculate(4, ObjectScaleConverter.ReferenceViewportExtent * 2),
+            "large windows do not keep magnifying markers");
     }
 
     private static void PlanetTemplateDefaults()
@@ -321,9 +342,7 @@ internal static class Program
         Equal("975", belt.ExtraFields["VisibleFunction"], "asteroid belt anchor is hidden");
         Equal("975", belt.ExtraFields["UsableFunction"], "asteroid belt anchor is not selectable");
         Equal("975", belt.ExtraFields["UsablePlanetFunction"], "asteroid belt anchor has no use button");
-        var beltInspector = new PropertyInspectorViewModel(
-            addMap: _ => { },
-            configureLandableDestination: _ => { });
+        var beltInspector = new PropertyInspectorViewModel();
         beltInspector.Inspect(belt);
         True(!beltInspector.Sections.SelectMany(section => section.Actions).Any(action =>
                 action.Label.Contains("landable", StringComparison.OrdinalIgnoreCase) ||
@@ -587,10 +606,10 @@ internal static class Program
             targetClusterNode.AddChildCommand!.Execute(null);
             Equal(1000, viewModel.CurrentSystem!.RowId, "Cluster action creates a System in the reserved range");
             Equal(1, viewModel.CurrentSystem.ClusterRowId, "Cluster action targets the right-clicked Cluster");
-            Equal("Add Planet", viewModel.ContextualAddButtonText, "System view offers Add Planet");
+            Equal("Add Planet/Object", viewModel.ContextualAddButtonText, "System view offers Add Planet/Object");
 
             var targetSystemNode = FindNode(viewModel, row => row is GalaxySystem { RowId: 1000 });
-            Equal("Add Planet", targetSystemNode.AddChildMenuHeader, "System context menu offers Add Planet");
+            Equal("Add Planet/Object", targetSystemNode.AddChildMenuHeader, "System context menu offers Add Planet/Object");
             targetSystemNode.AddChildCommand!.Execute(null);
             Equal(1, viewModel.Document.Planets.Count(planet => planet.SystemRowId == 1000),
                 "System action creates a Planet under the right-clicked System");
@@ -900,6 +919,124 @@ internal static class Program
         });
     }
 
+    private static void TableProjectionFollowsEditorSession()
+    {
+        var loader = new CsvGalaxyMapLoader();
+        var baseLayer = loader.LoadBuiltInLayer();
+        var module = new GalaxyMapModule(
+            "Projection Test",
+            "PROJECTION_TEST",
+            ModuleColor.Cyan,
+            folderPath: null,
+            isReadOnly: false,
+            loadOrder: 1,
+            TestReservations());
+        var layer = new GalaxyMapLayer(module);
+        var canonical = CsvGalaxyMapLoader.GetCanonicalSchema(GalaxyMapTable.Cluster);
+        layer.SetSchema(new CsvTableSchema(
+            GalaxyMapTable.Cluster,
+            canonical.Headers.Concat(["FutureColumn"])));
+
+        var source = baseLayer.Clusters.First();
+        var physical = (Cluster)GalaxyMapRowCloner.CloneForOverride(source, module);
+        physical.X += 0.01;
+        physical.AddExtraField("FutureColumn", "retained");
+        physical.CsvSnapshot!.MarkDirty("X");
+        layer.Upsert(physical);
+
+        var workspace = new GalaxyMapWorkspace(baseLayer, [layer]);
+        workspace.SetActiveModule(module);
+        var session = new EditorSession(workspace);
+        var edits = new EditSessionService(session);
+        edits.MarkTableDirty(module, GalaxyMapTable.Cluster);
+        edits.Publish(ChangeImpact.For([GalaxyMapTable.Cluster], [physical.Key], isStructural: false));
+
+        var snapshot = new TableProjectionService(session).Project(GalaxyMapTable.Cluster);
+        Equal(session.Revision, snapshot.SessionRevision, "projection carries the current session revision");
+        SequenceEqual(snapshot.Rows.Select(row => row.Key.RowId).OrderBy(id => id),
+            snapshot.Rows.Select(row => row.Key.RowId), "projection sorts true sparse row IDs");
+        True(snapshot.Columns.Any(column => column.Name == "FutureColumn" && !column.IsCanonical),
+            "projection unions retained unknown columns");
+
+        var projected = snapshot.Rows.Single(row => row.Key == physical.Key);
+        var x = projected.Cells["X"];
+        Equal(module.Tag, x.EffectiveModuleTag, "winning physical row supplies effective provenance");
+        Equal(2, x.OverrideChain.Count, "override comparison includes both physical instances");
+        True(x.DiffersFromLowerInstance, "changed values are distinguished from lower instances");
+        True(x.IsStaged, "dirty session tables mark projected cells as staged");
+        Equal("retained", projected.Cells["FutureColumn"].RawValue as string ?? string.Empty,
+            "unknown raw values survive projection");
+    }
+
+    private static void EditTransactionRollbackAndHistoryContract()
+    {
+        var loader = new CsvGalaxyMapLoader();
+        var baseLayer = loader.LoadBuiltInLayer();
+        var module = new GalaxyMapModule(
+            "Transaction Test",
+            "TRANSACTION_TEST",
+            ModuleColor.Green,
+            folderPath: null,
+            isReadOnly: false,
+            loadOrder: 1,
+            TestReservations());
+        var layer = new GalaxyMapLayer(module);
+        layer.SetSchema(CsvGalaxyMapLoader.GetCanonicalSchema(GalaxyMapTable.Cluster));
+        var source = baseLayer.Clusters.First();
+        var physical = (Cluster)GalaxyMapRowCloner.CloneForOverride(source, module);
+        layer.Upsert(physical);
+
+        var workspace = new GalaxyMapWorkspace(baseLayer, [layer]);
+        workspace.SetActiveModule(module);
+        var session = new EditorSession(workspace);
+        var edits = new EditSessionService(session);
+        var presentation = new HistoryPresentationState(
+            physical.Key,
+            NavigationTarget.Galaxy,
+            module.Tag,
+            InspectPhysicalInstance: false);
+        var originalX = workspace.EffectiveDocument.ClustersByRowId[physical.RowId].X;
+        var revision = session.Revision;
+
+        var failed = edits.ExecuteMutation(new EditMutationRequest(
+            [physical.Key],
+            [GalaxyMapTable.Cluster],
+            () =>
+            {
+                var replacement = (Cluster)GalaxyMapRowCloner.Clone(layer.Clusters.Single());
+                replacement.X = originalX + 0.25;
+                layer.Upsert(replacement);
+                throw new InvalidOperationException("synthetic rollback");
+            },
+            presentation,
+            "unreachable"));
+
+        True(!failed.Succeeded, "expected mutation failure is reported");
+        NearlyEqual(originalX, workspace.EffectiveDocument.ClustersByRowId[physical.RowId].X,
+            "failed mutation restores the effective row");
+        True(!session.Changes.HasChanges, "failed mutation restores the staged change set");
+        Equal(0, session.History.UndoCount, "failed mutation does not leave an undo entry");
+        Equal(revision, session.Revision, "failed mutation does not publish a session revision");
+
+        var succeeded = edits.ExecuteMutation(new EditMutationRequest(
+            [physical.Key],
+            [GalaxyMapTable.Cluster],
+            () =>
+            {
+                var replacement = (Cluster)GalaxyMapRowCloner.Clone(layer.Clusters.Single());
+                replacement.X = originalX + 0.5;
+                layer.Upsert(replacement);
+            },
+            presentation,
+            "transaction contract"));
+
+        True(succeeded.Succeeded, "valid mutation succeeds");
+        Equal(1, session.History.UndoCount, "one logical mutation creates exactly one undo entry");
+        Equal(revision + 1, session.Revision, "successful mutation publishes one session revision");
+        True(session.Changes.DirtyTables[module.Tag].Contains(GalaxyMapTable.Cluster),
+            "successful mutation stages its table");
+    }
+
     private static void MainViewModelWritesFullRowOverrides()
     {
         WithTemporaryDirectory(parent =>
@@ -1173,13 +1310,23 @@ internal static class Program
                 .First(cluster => cluster.Systems.All(system =>
                     !system.Label.Equals("System99", StringComparison.OrdinalIgnoreCase)));
 
-            True(!viewModel.MoveRow(sourceSystem, targetCluster.RowId), "BASEGAME System cannot move directly");
-            True(viewModel.ErrorMessage.Contains("Clone", StringComparison.OrdinalIgnoreCase),
-                "BASEGAME move explains the clone requirement");
-            var baseNode = FindNode(viewModel, row => row is GalaxySystem system && system.RowId == sourceSystem.RowId);
+            var sourceSystemRowId = sourceSystem.RowId;
+            var sourceClusterRowId = sourceSystem.ClusterRowId;
+            True(viewModel.MoveRow(sourceSystem, targetCluster.RowId),
+                "BASEGAME System move creates an override directly");
+            var movedBaseSystem = viewModel.Document.SystemsByRowId[sourceSystemRowId];
+            Equal("MOVE_TEST", movedBaseSystem.Origin!.ModuleTag,
+                "BASEGAME move is staged as a same-ID module override");
+            Equal(targetCluster.RowId, movedBaseSystem.ClusterRowId,
+                "new override receives the requested parent");
+            var baseNode = FindNode(viewModel, row => row is GalaxySystem system && system.RowId == sourceSystemRowId);
             True(baseNode.SupportsParentMove, "System context menu supports parent moves");
-            True(!baseNode.CanMoveToParent && !baseNode.MoveCommand!.CanExecute(null),
-                "BASEGAME System move command is disabled");
+            True(baseNode.CanMoveToParent && baseNode.MoveCommand!.CanExecute(null),
+                "System move command remains enabled for the resulting override");
+            viewModel.UndoCommand.Execute(null);
+            sourceSystem = viewModel.Document.SystemsByRowId[sourceSystemRowId];
+            Equal(sourceClusterRowId, sourceSystem.ClusterRowId,
+                "direct BASEGAME move is one undoable transaction");
 
             True(viewModel.CloneRow(sourceSystem,
                 new CloneContentRequest(1000, "System99", 0, "Movable System", true)),
@@ -1274,9 +1421,23 @@ internal static class Program
                 "module created");
 
             var baseCluster = viewModel.Document!.Clusters.First();
-            True(!viewModel.BeginCoordinateDrag(baseCluster), "BASEGAME coordinates cannot be dragged directly");
-            True(viewModel.ErrorMessage.Contains("Clone", StringComparison.OrdinalIgnoreCase),
-                "BASEGAME drag explains the clone requirement");
+            var baseOriginalX = baseCluster.X;
+            var baseOriginalY = baseCluster.Y;
+            True(viewModel.BeginCoordinateDrag(baseCluster),
+                "BASEGAME coordinate drag chooses the active edit module");
+            viewModel.PreviewCoordinateDrag(baseCluster, new Point(0.44, 0.55));
+            True(viewModel.CompleteCoordinateDrag(), "BASEGAME coordinate drag stages an override");
+            var movedBaseCluster = viewModel.Document.ClustersByRowId[baseCluster.RowId];
+            Equal("DRAG_TEST", movedBaseCluster.Origin!.ModuleTag,
+                "BASEGAME coordinate move becomes a same-ID module override");
+            NearlyEqual(0.44, movedBaseCluster.X, "BASEGAME override receives dragged X");
+            NearlyEqual(0.55, movedBaseCluster.Y, "BASEGAME override receives dragged Y");
+            viewModel.UndoCommand.Execute(null);
+            baseCluster = viewModel.Document.ClustersByRowId[baseCluster.RowId];
+            NearlyEqual(baseOriginalX, baseCluster.X, "undo restores BASEGAME X");
+            NearlyEqual(baseOriginalY, baseCluster.Y, "undo restores BASEGAME Y");
+            Equal(1, viewModel.Workspace!.GetOverrideChain(baseCluster.Key).Count,
+                "undo removes the coordinate override entirely");
             True(viewModel.CloneRow(baseCluster,
                 new CloneContentRequest(100, "Cluster99", 0, "Movable Cluster", false)),
                 "module-owned Cluster clone succeeds");
@@ -1337,6 +1498,16 @@ internal static class Program
 
             var sourceSystem = viewModel.Document!.Systems.First(system => system.Planets.Any(planet => planet.PlotPlanet is not null));
             var sourcePlanet = sourceSystem.Planets.First(planet => planet.PlotPlanet is not null);
+            var duplicatePlanet = sourceSystem.Planets.First(planet => planet.RowId != sourcePlanet.RowId);
+            var originalPlanetLabel = sourcePlanet.Label;
+            FindNode(viewModel, row => row is Planet candidate && candidate.RowId == sourcePlanet.RowId).IsSelected = true;
+            var planetLabelField = viewModel.Inspector.Sections.Single(section => section.Title == "Planet")
+                .Fields.Single(field => field.Name == "Label");
+            planetLabelField.Value = duplicatePlanet.Label;
+            True(planetLabelField.HasError, "duplicate Planet label is rejected inline");
+            Equal(originalPlanetLabel, viewModel.Document.PlanetsByRowId[sourcePlanet.RowId].Label,
+                "duplicate label never reaches the effective model");
+
             FindNode(viewModel, row => row is GalaxySystem candidate && candidate.RowId == sourceSystem.RowId).IsSelected = true;
             viewModel.Inspector.Sections.Single(section => section.Title == "System")
                 .Fields.Single(field => field.Name == "Label").Value = "System99";
@@ -1663,13 +1834,11 @@ internal static class Program
             var nebulaSystem = viewModel.Document!.Systems.First(system => system.ShowNebula == 1 && system.Cluster is not null);
             var cluster = nebulaSystem.Cluster!;
             FindNode(viewModel, row => row is Cluster candidate && candidate.RowId == cluster.RowId).IsSelected = true;
-            // Built-in Cluster backgrounds are now JPG, while imported module
-            // textures deliberately retain PNG support.
-            var sourceTexture = Path.Combine(FindTextureDirectory(), GalaxyMapTextureService.SystemAssetName);
+            var sourceTexture = Path.Combine(FindTextureDirectory(), "Cluster01.jpg");
             True(viewModel.StageClusterTexture(cluster, viewModel.ActiveModule!, sourceTexture),
-                "module texture is staged");
+                "JPEG module texture is staged");
             var expectedPath = Path.Combine(viewModel.ActiveModule!.FolderPath!, "textures",
-                $"Cluster_{cluster.RowId}_stars01.png");
+                $"Cluster_{cluster.RowId}_Cluster01.jpg");
             True(!File.Exists(expectedPath), "texture copy waits for Commit");
             True(viewModel.CurrentViewModel is ClusterViewModel { BackgroundTexture: not null },
                 "staged Cluster texture previews immediately");
@@ -1689,7 +1858,7 @@ internal static class Program
             True(viewModel.CommitPendingChanges(), "texture metadata commit succeeds");
             True(File.Exists(expectedPath), "texture is copied into module textures folder on Commit");
             var reloaded = new GalaxyMapModuleManifestStore().Load(viewModel.ActiveModule.FolderPath!);
-            Equal("textures/Cluster_" + cluster.RowId + "_stars01.png",
+            Equal("textures/Cluster_" + cluster.RowId + "_Cluster01.jpg",
                 reloaded.ClusterTextureLinks[cluster.RowId], "manifest stores Cluster texture link");
             NotNull(new GalaxyMapTextureService(FindTextureDirectory()).GetModuleClusterTexture(reloaded, cluster.RowId),
                 "committed module texture resolves independently of a Cluster row override");
@@ -1868,6 +2037,12 @@ internal static class Program
                 "landable-destination workflow returns for compatible templates");
             var landableWindow = new LandableDestinationWindow("BIOA_TEST", "Start", "Land", null, true);
             Compose(landableWindow, application.Dispatcher);
+            var confirmationWindow = new ConfirmationWindow(
+                "Confirm staged change", "Stage this change?", "Confirm", "Cancel");
+            Compose(confirmationWindow, application.Dispatcher);
+            Equal(((SolidColorBrush)application.FindResource("AppBackgroundBrush")).Color,
+                ((SolidColorBrush)confirmationWindow.Background).Color,
+                "confirmation dialogs use the application dark background");
             var moveWindow = new MoveDestinationWindow(
                 viewModel.Document!.Systems.First(),
                 [new MoveDestinationOption(99, "Test Cluster", "Test Cluster • row 99", "System01", "System02")]);

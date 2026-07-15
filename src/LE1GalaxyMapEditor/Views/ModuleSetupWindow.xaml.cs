@@ -4,17 +4,10 @@ using System.Windows;
 using System.Windows.Controls;
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Infrastructure;
+using LE1GalaxyMapEditor.Workflows.Ports;
 using Microsoft.Win32;
 
 namespace LE1GalaxyMapEditor.Views;
-
-public sealed record ModuleSetupResult(
-    string Name,
-    string Tag,
-    ModuleColor Color,
-    string FolderPath,
-    ModuleIdReservations Reservations,
-    int LoadOrder);
 
 public partial class ModuleSetupWindow : Window
 {

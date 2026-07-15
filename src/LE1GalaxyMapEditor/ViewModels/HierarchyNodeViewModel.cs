@@ -118,7 +118,7 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
     {
         GalaxyRootItem => "Add Cluster",
         Cluster => "Add System",
-        GalaxySystem => "Add Planet",
+        GalaxySystem => "Add Planet/Object",
         _ => string.Empty
     };
     public bool SupportsParentMove { get; }

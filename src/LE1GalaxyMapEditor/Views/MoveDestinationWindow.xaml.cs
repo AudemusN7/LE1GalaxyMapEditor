@@ -2,18 +2,9 @@ using System.Windows;
 using System.Windows.Controls;
 using LE1GalaxyMapEditor.Infrastructure;
 using LE1GalaxyMapEditor.Models;
+using LE1GalaxyMapEditor.Workflows.Ports;
 
 namespace LE1GalaxyMapEditor.Views;
-
-public sealed record MoveDestinationOption(
-    int RowId,
-    string Label,
-    string Detail,
-    string CurrentLabel,
-    string ResultingLabel)
-{
-    public override string ToString() => Label;
-}
 
 public partial class MoveDestinationWindow : Window
 {

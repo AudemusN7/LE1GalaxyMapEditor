@@ -5,3 +5,8 @@ obj/
 *.suo
 TestResults/
 artifacts/
+
+# Local planet-renderer research. The production implementation belongs under src/.
+tools/LE1PlanetRenderer/
+tools/LE1PlanetMaterialResearch/
+tests/Shader Research/

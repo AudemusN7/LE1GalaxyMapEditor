@@ -58,8 +58,20 @@
                             <Grid Width="50" Height="50" HorizontalAlignment="Center"
                                   RenderTransformOrigin="0.5,0.5">
                                 <Grid.RenderTransform>
-                                    <ScaleTransform ScaleX="{Binding Item.Scale, Converter={StaticResource ObjectScaleConverter}}"
-                                                    ScaleY="{Binding Item.Scale, Converter={StaticResource ObjectScaleConverter}}" />
+                                    <ScaleTransform>
+                                        <ScaleTransform.ScaleX>
+                                            <MultiBinding Converter="{StaticResource ObjectScaleConverter}">
+                                                <Binding Path="Item.Scale" />
+                                                <Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType={x:Type UserControl}}" />
+                                            </MultiBinding>
+                                        </ScaleTransform.ScaleX>
+                                        <ScaleTransform.ScaleY>
+                                            <MultiBinding Converter="{StaticResource ObjectScaleConverter}">
+                                                <Binding Path="Item.Scale" />
+                                                <Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType={x:Type UserControl}}" />
+                                            </MultiBinding>
+                                        </ScaleTransform.ScaleY>
+                                    </ScaleTransform>
                                 </Grid.RenderTransform>
                                 <Ellipse x:Name="Glow"
                                          Fill="{Binding ModuleColor, Converter={StaticResource ModuleColorBrushConverter}}"

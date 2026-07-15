@@ -45,21 +45,25 @@ public partial class MainWindow : Window
             return;
         }
 
-        var choice = MessageBox.Show(
-            this,
-            "There are uncommitted module changes. Commit them before closing?",
+        var dialog = new ConfirmationWindow(
             "Uncommitted galaxy-map changes",
-            MessageBoxButton.YesNoCancel,
-            MessageBoxImage.Warning);
-        if (choice == MessageBoxResult.Cancel)
+            "There are uncommitted module changes. Commit them before closing?",
+            "Commit",
+            "Discard",
+            "Cancel")
+        {
+            Owner = this
+        };
+        dialog.ShowDialog();
+        if (dialog.Choice == ConfirmationChoice.Cancel)
         {
             eventArgs.Cancel = true;
         }
-        else if (choice == MessageBoxResult.Yes && !viewModel.CommitPendingChanges())
+        else if (dialog.Choice == ConfirmationChoice.Primary && !viewModel.CommitPendingChanges())
         {
             eventArgs.Cancel = true;
         }
-        else if (choice == MessageBoxResult.No)
+        else if (dialog.Choice == ConfirmationChoice.Secondary)
         {
             viewModel.DiscardPendingChanges();
         }
