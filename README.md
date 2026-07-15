@@ -13,7 +13,8 @@ See [UI theming](docs/UI-THEMING.md) for changing fonts, text sizes and colours,
 - Keeps every known and unknown CSV column. The unnamed first column remains the true, potentially sparse 2DA row ID.
 - Mounts additional Legendary Explorer `_part` tables above BASEGAME, including DLC-style expansions such as Spectre Expansion Mod.
 - Creates writable authoring modules with a name, tag, colour, explicit mount priority, and optional separate reserved ID ranges for Cluster, System, Planet, Map, and Relay rows.
-- Creates new Clusters and Systems inside those reserved ranges. The `+P` workflow offers Generic planet, Ringed planet, Asteroid belt, Hidden anomaly, and Anomaly / ship templates with verified structural defaults.
+- Creates new Clusters, Systems, and Planets inside those reserved ranges. A single contextual button offers **Add Cluster**, **Add System**, or **Add Planet** for the active map level; the Planet workflow includes Generic planet, Ringed planet, Asteroid belt, Hidden anomaly, and Anomaly / ship templates with verified structural defaults.
+- Provides the same contextual creation action by right-clicking blank canvas space or the corresponding Galaxy, Cluster, or System row in the hierarchy.
 - Clones Clusters, Systems, and Planets from hierarchy or map context menus, optionally including children and linked rows.
 - Stages confirmed deletion of writable-module Clusters, Systems, Planets, PlotPlanet rows, and Map rows.
 - Adds PlotPlanet data, linked Map rows, and Relay connections. Any new or existing Planet can use the optional landable-destination workflow to configure its persistent level, StartPoint, Remote Event, use-button TLK, and optional mirrored PlotPlanet row together.
@@ -54,7 +55,7 @@ Each individual file update uses a flushed temporary file in the destination fol
 1. Start the application; the deployed read-only BASEGAME tables load automatically.
 2. Choose **New Module**.
 3. Enter its display name, unique tag, colour, mount priority, and the non-overlapping row ranges it actually needs. Leave unused tables blank.
-4. Edit BASEGAME properties, use the `+C`, `+S`, and `+P` buttons, or right-click existing map content to clone it.
+4. Edit BASEGAME properties, use the contextual **Add Cluster/System/Planet** button, or right-click hierarchy rows and map content for creation and cloning actions.
 5. Review the dirty marker on the module and press **Commit** when ready to update its CSVs.
 6. On future starts, the remembered module stack is restored automatically.
 

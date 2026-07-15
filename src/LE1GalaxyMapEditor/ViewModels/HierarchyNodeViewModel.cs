@@ -24,12 +24,18 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
         Action<GalaxyMapRow>? cloneAction = null,
         Action<GalaxyMapRow>? deleteAction = null,
         Action<GalaxyMapRow>? moveAction = null,
-        bool canMoveToParent = false)
+        bool canMoveToParent = false,
+        Action<HierarchyNodeViewModel>? addChildAction = null,
+        Func<bool>? canAddChild = null)
     {
         Item = item;
         Parent = parent;
         _selectedAction = selectedAction;
         InstanceCount = Math.Max(1, instanceCount);
+        SupportsAddChild = item is Cluster or GalaxySystem && addChildAction is not null;
+        AddChildCommand = SupportsAddChild
+            ? new RelayCommand(() => addChildAction!(this), () => canAddChild?.Invoke() ?? true)
+            : null;
         CloneCommand = new RelayCommand(() => cloneAction?.Invoke(Item), () => cloneAction is not null);
         DeleteCommand = new RelayCommand(() => deleteAction?.Invoke(Item), () => deleteAction is not null);
         SupportsParentMove = item is GalaxySystem or Planet;
@@ -40,21 +46,33 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
         Item.PropertyChanged += ItemOnPropertyChanged;
     }
 
-    private HierarchyNodeViewModel(Action<HierarchyNodeViewModel> selectedAction)
+    private HierarchyNodeViewModel(
+        Action<HierarchyNodeViewModel> selectedAction,
+        Action<HierarchyNodeViewModel>? addChildAction,
+        Func<bool>? canAddChild)
     {
         Item = new GalaxyRootItem();
         IsGalaxyRoot = true;
         _selectedAction = selectedAction;
+        SupportsAddChild = addChildAction is not null;
+        AddChildCommand = SupportsAddChild
+            ? new RelayCommand(() => addChildAction!(this), () => canAddChild?.Invoke() ?? true)
+            : null;
     }
 
-    public static HierarchyNodeViewModel CreateGalaxyRoot(Action<HierarchyNodeViewModel> selectedAction)
-        => new(selectedAction);
+    public static HierarchyNodeViewModel CreateGalaxyRoot(
+        Action<HierarchyNodeViewModel> selectedAction,
+        Action<HierarchyNodeViewModel>? addChildAction = null,
+        Func<bool>? canAddChild = null)
+        => new(selectedAction, addChildAction, canAddChild);
 
     public GalaxyMapRow Item { get; private set; }
     public GalaxyMapRow? Model => IsGalaxyRoot ? null : Item;
     public HierarchyNodeViewModel? Parent { get; }
     public ObservableCollection<HierarchyNodeViewModel> Children { get; } = [];
     public bool IsGalaxyRoot { get; }
+    public bool SupportsRowActions => !IsGalaxyRoot;
+    public bool SupportsAddChild { get; }
     public int InstanceCount { get; private set; }
     public bool HasMultipleInstances => InstanceCount > 1;
 
@@ -95,6 +113,14 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
     public RelayCommand? CloneCommand { get; }
     public RelayCommand? DeleteCommand { get; }
     public RelayCommand? MoveCommand { get; }
+    public RelayCommand? AddChildCommand { get; }
+    public string AddChildMenuHeader => Item switch
+    {
+        GalaxyRootItem => "Add Cluster",
+        Cluster => "Add System",
+        GalaxySystem => "Add Planet",
+        _ => string.Empty
+    };
     public bool SupportsParentMove { get; }
     public bool CanMoveToParent { get; private set; }
     public string MoveMenuHeader => Item is GalaxySystem ? "Move to Cluster…" : "Move to System…";
@@ -163,6 +189,8 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
             ancestor.IsExpanded = true;
         }
     }
+
+    internal void RaiseCommandStates() => AddChildCommand?.RaiseCanExecuteChanged();
 
     public void Dispose()
     {

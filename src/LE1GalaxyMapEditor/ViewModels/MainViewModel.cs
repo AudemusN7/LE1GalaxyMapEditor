@@ -119,6 +119,7 @@ public sealed class MainViewModel : ObservableObject
         AddClusterCommand = new RelayCommand(AddCluster, () => HasActiveModule);
         AddSystemCommand = new RelayCommand(AddSystem, () => HasActiveModule && CurrentCluster is not null);
         AddPlanetCommand = new RelayCommand(AddPlanet, () => HasActiveModule && CurrentSystem is not null);
+        ContextualAddCommand = new RelayCommand(AddForCurrentView, CanAddForCurrentView);
         NavigateGalaxyCommand = new RelayCommand(NavigateGalaxy, () => HasDocument);
         NavigateClusterCommand = new RelayCommand(
             () =>
@@ -186,7 +187,36 @@ public sealed class MainViewModel : ObservableObject
         ? "No active authoring module"
         : ActiveModule.Name;
     public ModuleColor ActiveModuleColor => ActiveModule?.Color ?? ModuleColor.BaseGameBlue;
-    public object? CurrentViewModel { get => _currentViewModel; private set => SetProperty(ref _currentViewModel, value); }
+    public object? CurrentViewModel
+    {
+        get => _currentViewModel;
+        private set
+        {
+            if (SetProperty(ref _currentViewModel, value))
+            {
+                OnPropertyChanged(nameof(HasContextualAddAction));
+                OnPropertyChanged(nameof(ContextualAddButtonText));
+                OnPropertyChanged(nameof(ContextualAddToolTip));
+                ContextualAddCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool HasContextualAddAction => CurrentViewModel is GalaxyViewModel or ClusterViewModel or SystemViewModel;
+    public string ContextualAddButtonText => CurrentViewModel switch
+    {
+        GalaxyViewModel => "Add Cluster",
+        ClusterViewModel => "Add System",
+        SystemViewModel => "Add Planet",
+        _ => string.Empty
+    };
+    public string ContextualAddToolTip => CurrentViewModel switch
+    {
+        GalaxyViewModel => "Add a Cluster to the active module",
+        ClusterViewModel => "Add a System to this Cluster",
+        SystemViewModel => "Add a Planet or system object to this System",
+        _ => string.Empty
+    };
 
     public Cluster? CurrentCluster
     {
@@ -318,6 +348,7 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand AddClusterCommand { get; }
     public RelayCommand AddSystemCommand { get; }
     public RelayCommand AddPlanetCommand { get; }
+    public RelayCommand ContextualAddCommand { get; }
     public RelayCommand NavigateGalaxyCommand { get; }
     public RelayCommand NavigateClusterCommand { get; }
     public RelayCommand ToggleCoordinateGridCommand { get; }
@@ -880,6 +911,52 @@ public sealed class MainViewModel : ObservableObject
             factory => factory.CreateCluster(),
             row => new ViewContext(row.RowId, null),
             "Created a new Cluster in the active module.");
+
+    private bool CanAddForCurrentView() => HasActiveModule && CurrentViewModel switch
+    {
+        GalaxyViewModel => true,
+        ClusterViewModel => CurrentCluster is not null,
+        SystemViewModel => CurrentSystem is not null,
+        _ => false
+    };
+
+    private void AddForCurrentView()
+    {
+        switch (CurrentViewModel)
+        {
+            case GalaxyViewModel:
+                AddCluster();
+                break;
+            case ClusterViewModel when CurrentCluster is not null:
+                AddSystem();
+                break;
+            case SystemViewModel when CurrentSystem is not null:
+                AddPlanet();
+                break;
+        }
+    }
+
+    private void AddChildToHierarchyNode(HierarchyNodeViewModel node)
+    {
+        switch (node)
+        {
+            case { IsGalaxyRoot: true }:
+                SelectNodeCore(node);
+                NavigateGalaxy();
+                AddCluster();
+                break;
+            case { Item: Cluster cluster }:
+                SelectNodeCore(node);
+                NavigateCluster(cluster);
+                AddSystem();
+                break;
+            case { Item: GalaxySystem system }:
+                SelectNodeCore(node);
+                NavigateSystem(system);
+                AddPlanet();
+                break;
+        }
+    }
 
     private void AddSystem()
     {
@@ -1869,7 +1946,10 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        _galaxyRoot = HierarchyNodeViewModel.CreateGalaxyRoot(SelectFromHierarchy);
+        _galaxyRoot = HierarchyNodeViewModel.CreateGalaxyRoot(
+            SelectFromHierarchy,
+            AddChildToHierarchyNode,
+            () => HasActiveModule);
         HierarchyRoots.Add(_galaxyRoot);
         foreach (var cluster in Document.Clusters)
         {
@@ -1899,7 +1979,9 @@ public sealed class MainViewModel : ObservableObject
             CloneRow,
             DeleteRow,
             MoveRowDialog,
-            CanMoveOwnedRow(row));
+            CanMoveOwnedRow(row),
+            AddChildToHierarchyNode,
+            () => HasActiveModule);
         _nodes[row] = node;
         _nodesByKey[row.Key] = node;
         return node;
@@ -3682,6 +3764,12 @@ public sealed class MainViewModel : ObservableObject
         AddClusterCommand.RaiseCanExecuteChanged();
         AddSystemCommand.RaiseCanExecuteChanged();
         AddPlanetCommand.RaiseCanExecuteChanged();
+        ContextualAddCommand.RaiseCanExecuteChanged();
+        _galaxyRoot?.RaiseCommandStates();
+        foreach (var node in _nodesByKey.Values)
+        {
+            node.RaiseCommandStates();
+        }
         NavigateGalaxyCommand.RaiseCanExecuteChanged();
         NavigateClusterCommand.RaiseCanExecuteChanged();
         UndoCommand.RaiseCanExecuteChanged();

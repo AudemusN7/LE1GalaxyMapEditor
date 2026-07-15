@@ -39,6 +39,7 @@ internal static class Program
         Run("Square viewport and coordinate grid definitions", SquareViewportAndGridDefinitions);
         Run("Texture mapping ignores PNG alpha", TextureMappingIgnoresPngAlpha);
         Run("Hierarchy navigation semantics", HierarchyNavigationSemantics);
+        Run("Contextual add actions follow the active view", ContextualAddActionsFollowActiveView);
         Run("Relay layer observes collection changes", RelayLayerObservesCollectionChanges);
         Run("Duplicate row IDs are rejected", DuplicateRowIdsAreRejected);
         Run("Missing table is reported", MissingTableIsReported);
@@ -542,6 +543,64 @@ internal static class Program
             True(viewModel.CurrentViewModel is SystemViewModel,
                 "single-clicking a Planet remains in System view");
             True(planetNode.IsSelected, "map-selected Planet synchronizes to the hierarchy");
+        });
+    }
+
+    private static void ContextualAddActionsFollowActiveView()
+    {
+        WithTemporaryDirectory(parent =>
+        {
+            var viewModel = new MainViewModel(
+                new CsvGalaxyMapLoader(),
+                new GalaxyMapTextureService(FindTextureDirectory()),
+                new GalaxyMapWorkspaceStore(Path.Combine(parent, "workspace.json")));
+            True(viewModel.LoadBuiltIn(), "BASEGAME loads");
+
+            Equal("Add Cluster", viewModel.ContextualAddButtonText, "Galaxy view offers Add Cluster");
+            True(viewModel.HasContextualAddAction, "Galaxy view exposes one contextual add action");
+            True(!viewModel.ContextualAddCommand.CanExecute(null), "add action is disabled without a writable module");
+            var root = viewModel.HierarchyRoots.Single();
+            Equal("Add Cluster", root.AddChildMenuHeader, "Galaxy root context menu offers Add Cluster");
+            True(root.SupportsAddChild, "Galaxy root supports child creation");
+            True(root.AddChildCommand is not null && !root.AddChildCommand.CanExecute(null),
+                "Galaxy root action is disabled without a writable module");
+
+            True(viewModel.CreateModule(parent, "Context Add Test", "CONTEXT_ADD", ModuleColor.Magenta,
+                TestReservations()), "module created");
+            True(viewModel.ContextualAddCommand.CanExecute(null), "Galaxy add action enables for the active module");
+
+            var clusterCount = viewModel.Document!.Clusters.Count;
+            viewModel.ContextualAddCommand.Execute(null);
+            Equal(clusterCount + 1, viewModel.Document.Clusters.Count, "canvas/header action creates a Cluster");
+            Equal(100, viewModel.CurrentCluster!.RowId, "new Cluster uses the reserved range");
+            Equal("Add System", viewModel.ContextualAddButtonText, "Cluster view offers Add System");
+
+            root = viewModel.HierarchyRoots.Single();
+            viewModel.ActivateHierarchyNode(root);
+            root.AddChildCommand!.Execute(null);
+            Equal(clusterCount + 2, viewModel.Document.Clusters.Count, "Galaxy root action creates a Cluster");
+            Equal(101, viewModel.CurrentCluster!.RowId, "Galaxy root action targets the galaxy");
+
+            var targetClusterNode = viewModel.HierarchyRoots.Single().Children
+                .Single(node => node.Item.RowId == 1);
+            Equal("Add System", targetClusterNode.AddChildMenuHeader, "Cluster context menu offers Add System");
+            targetClusterNode.AddChildCommand!.Execute(null);
+            Equal(1000, viewModel.CurrentSystem!.RowId, "Cluster action creates a System in the reserved range");
+            Equal(1, viewModel.CurrentSystem.ClusterRowId, "Cluster action targets the right-clicked Cluster");
+            Equal("Add Planet", viewModel.ContextualAddButtonText, "System view offers Add Planet");
+
+            var targetSystemNode = FindNode(viewModel, row => row is GalaxySystem { RowId: 1000 });
+            Equal("Add Planet", targetSystemNode.AddChildMenuHeader, "System context menu offers Add Planet");
+            targetSystemNode.AddChildCommand!.Execute(null);
+            Equal(1, viewModel.Document.Planets.Count(planet => planet.SystemRowId == 1000),
+                "System action creates a Planet under the right-clicked System");
+
+            viewModel.ContextualAddCommand.Execute(null);
+            Equal(2, viewModel.Document.Planets.Count(planet => planet.SystemRowId == 1000),
+                "System canvas/header action creates another Planet");
+            var planetNode = FindNode(viewModel, row => row is Planet { RowId: 10000 });
+            True(!planetNode.SupportsAddChild && planetNode.AddChildCommand is null,
+                "Planet rows do not expose a child-creation action");
         });
     }
 

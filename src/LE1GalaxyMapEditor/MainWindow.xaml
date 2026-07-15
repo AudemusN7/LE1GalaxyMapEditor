@@ -276,30 +276,16 @@
                             <TextBlock Text="HIERARCHY"
                                        Style="{StaticResource PanelHeaderStyle}"
                                        VerticalAlignment="Center" />
-                            <StackPanel Orientation="Horizontal"
-                                        HorizontalAlignment="Right"
-                                        VerticalAlignment="Center">
-                                <Button Content="+C"
-                                        Command="{Binding AddClusterCommand}"
-                                        Style="{StaticResource ChromeButtonStyle}"
-                                        Padding="5,3"
-                                        Margin="0,0,4,0"
-                                        FontSize="10"
-                                        ToolTip="Add Cluster to the active module" />
-                                <Button Content="+S"
-                                        Command="{Binding AddSystemCommand}"
-                                        Style="{StaticResource ChromeButtonStyle}"
-                                        Padding="5,3"
-                                        Margin="0,0,4,0"
-                                        FontSize="10"
-                                        ToolTip="Add System to the selected Cluster" />
-                                <Button Content="+P"
-                                        Command="{Binding AddPlanetCommand}"
-                                        Style="{StaticResource ChromeButtonStyle}"
-                                        Padding="5,3"
-                                        FontSize="10"
-                                        ToolTip="Add Planet or system object to the selected System" />
-                            </StackPanel>
+                            <Button x:Name="ContextualAddButton"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    MinWidth="106"
+                                    Content="{Binding ContextualAddButtonText}"
+                                    Command="{Binding ContextualAddCommand}"
+                                    Visibility="{Binding HasContextualAddAction, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                    Style="{StaticResource ChromeButtonStyle}"
+                                    Padding="12,6"
+                                    ToolTip="{Binding ContextualAddToolTip}" />
                         </Grid>
                     </Border>
                     <TreeView x:Name="HierarchyTree"
@@ -331,12 +317,20 @@
                                 <Setter Property="ContextMenu">
                                     <Setter.Value>
                                         <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-                                            <MenuItem Header="Clone…" Command="{Binding CloneCommand}" />
+                                            <MenuItem Header="{Binding AddChildMenuHeader}"
+                                                      Command="{Binding AddChildCommand}"
+                                                      Visibility="{Binding SupportsAddChild, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                            <Separator Visibility="{Binding SupportsAddChild, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                            <MenuItem Header="Clone…"
+                                                      Command="{Binding CloneCommand}"
+                                                      Visibility="{Binding SupportsRowActions, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                             <MenuItem Header="{Binding MoveMenuHeader}"
                                                       Command="{Binding MoveCommand}"
                                                       Visibility="{Binding SupportsParentMove, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                                            <Separator />
-                                            <MenuItem Header="Delete…" Command="{Binding DeleteCommand}" />
+                                            <Separator Visibility="{Binding SupportsRowActions, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                            <MenuItem Header="Delete…"
+                                                      Command="{Binding DeleteCommand}"
+                                                      Visibility="{Binding SupportsRowActions, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                         </ContextMenu>
                                     </Setter.Value>
                                 </Setter>
@@ -407,7 +401,16 @@
                 </Border>
 
                 <controls:SquareViewport x:Name="MapViewport" Grid.Row="1">
-                    <Grid x:Name="MapSquare" Background="#05080D" ClipToBounds="True">
+                    <Grid x:Name="MapSquare"
+                          Background="#05080D"
+                          ClipToBounds="True"
+                          ContextMenuService.IsEnabled="{Binding HasContextualAddAction}">
+                        <Grid.ContextMenu>
+                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                <MenuItem Header="{Binding ContextualAddButtonText}"
+                                          Command="{Binding ContextualAddCommand}" />
+                            </ContextMenu>
+                        </Grid.ContextMenu>
                         <ContentControl Content="{Binding CurrentViewModel}"
                                         HorizontalContentAlignment="Stretch"
                                         VerticalContentAlignment="Stretch" />
