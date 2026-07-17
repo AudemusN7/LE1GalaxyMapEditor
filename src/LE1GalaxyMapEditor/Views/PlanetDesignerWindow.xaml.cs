@@ -244,7 +244,9 @@ public partial class PlanetDesignerWindow : Window
     }
 
     private bool IsPreviewActive =>
-        !_closed && IsVisible && IsActive && WindowState != WindowState.Minimized;
+        !_closed && IsVisible && WindowState != WindowState.Minimized &&
+        (IsActive || OwnedWindows.Cast<Window>().Any(window =>
+            window.IsVisible && window is ColorPickerWindow or HdrColorPickerWindow));
 
     private void UpdatePreviewActivity(bool scheduleCurrentFrame = true)
     {

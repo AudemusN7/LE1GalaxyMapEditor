@@ -428,6 +428,17 @@ public partial class MainWindow : Window
             stagedTrigger.Setters.Add(new Setter(DataGridCell.BorderThicknessProperty, new Thickness(1.5)));
             cellStyle.Triggers.Add(stagedTrigger);
 
+            // Keep selection visually distinct from the filled staged-edit state.
+            var selectedTrigger = new Trigger
+            {
+                Property = DataGridCell.IsSelectedProperty,
+                Value = true
+            };
+            selectedTrigger.Setters.Add(new Setter(DataGridCell.BorderBrushProperty, Brushes.White));
+            selectedTrigger.Setters.Add(new Setter(DataGridCell.BorderThicknessProperty, new Thickness(2)));
+            cellStyle.Triggers.Add(selectedTrigger);
+
+            // Invalid input must remain visible while the cell is still selected/editing.
             var errorTrigger = new DataTrigger
             {
                 Binding = new Binding($"Cells[{index}].HasError"),
@@ -437,17 +448,6 @@ public partial class MainWindow : Window
             errorTrigger.Setters.Add(new Setter(DataGridCell.BorderBrushProperty, FindResource("DangerBrush")));
             errorTrigger.Setters.Add(new Setter(DataGridCell.BorderThicknessProperty, new Thickness(2)));
             cellStyle.Triggers.Add(errorTrigger);
-
-            // Keep selection visually distinct from the filled staged-edit state. This trigger is
-            // deliberately last so the active-cell outline remains visible on staged/error cells.
-            var selectedTrigger = new Trigger
-            {
-                Property = DataGridCell.IsSelectedProperty,
-                Value = true
-            };
-            selectedTrigger.Setters.Add(new Setter(DataGridCell.BorderBrushProperty, Brushes.White));
-            selectedTrigger.Setters.Add(new Setter(DataGridCell.BorderThicknessProperty, new Thickness(2)));
-            cellStyle.Triggers.Add(selectedTrigger);
 
             TableGrid.Columns.Add(new DataGridTextColumn
             {
@@ -483,10 +483,19 @@ public partial class MainWindow : Window
 
     private void TableGrid_OnCellEditEnding(object sender, DataGridCellEditEndingEventArgs eventArgs)
     {
-        if (eventArgs.EditAction != DataGridEditAction.Commit ||
-            eventArgs.Row.Item is not TableRowViewModel row ||
-            eventArgs.EditingElement is not TextBox editor ||
+        if (eventArgs.Row.Item is not TableRowViewModel row ||
             DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        if (eventArgs.EditAction == DataGridEditAction.Cancel)
+        {
+            viewModel.TableViewer.CancelCellEdit(row, eventArgs.Column.DisplayIndex);
+            return;
+        }
+
+        if (eventArgs.EditingElement is not TextBox editor)
         {
             return;
         }

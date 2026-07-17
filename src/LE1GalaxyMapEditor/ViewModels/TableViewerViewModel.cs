@@ -157,6 +157,18 @@ public sealed class TableViewerViewModel : ObservableObject
         return result;
     }
 
+    public void CancelCellEdit(TableRowViewModel row, int columnIndex)
+    {
+        if (columnIndex < 0 || columnIndex >= row.Cells.Count)
+        {
+            return;
+        }
+
+        var cell = row.Cells[columnIndex];
+        cell.EditValue = cell.DisplayValue;
+        cell.SetValidationError(null);
+    }
+
     private static TableRowViewModel ProjectRow(MergedTableRow row, IReadOnlyList<TableColumn> columns)
         => new(
             row.Key,

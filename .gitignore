@@ -7,7 +7,6 @@ TestResults/
 artifacts/
 
 # Local documentation, test fixtures, and development tools are not release source.
-/docs/
 /tests/
 /tools/
 

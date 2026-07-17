@@ -771,7 +771,7 @@
                       SelectionUnit="Cell"
                       ClipboardCopyMode="ExcludeHeader"
                       EnableRowVirtualization="True"
-                      EnableColumnVirtualization="False"
+                      EnableColumnVirtualization="True"
                       VirtualizingPanel.IsVirtualizing="True"
                       VirtualizingPanel.VirtualizationMode="Recycling"
                       ScrollViewer.CanContentScroll="True"
