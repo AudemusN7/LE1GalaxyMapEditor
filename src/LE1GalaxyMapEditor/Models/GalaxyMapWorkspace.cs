@@ -42,6 +42,13 @@ public sealed class GalaxyMapWorkspace
         : _moduleLayers.FirstOrDefault(layer => ReferenceEquals(layer.Module, ActiveModule));
     public GalaxyMapDocument EffectiveDocument { get; private set; }
 
+    /// <summary>
+    /// Monotonically identifies successful effective-document compositions. This is
+    /// deliberately separate from the editor-session revision: a session change can
+    /// be presentation-only, and this counter makes repeated composition observable.
+    /// </summary>
+    public long CompositionRevision { get; private set; }
+
     public void Mount(GalaxyMapLayer layer) => Mount(layer, recompose: true);
 
     /// <summary>Mounts several layers and composes once after the complete load-order stack is present.</summary>
@@ -133,51 +140,12 @@ public sealed class GalaxyMapWorkspace
     public IReadOnlyList<GalaxyMapRow> GetOverrideChain(GalaxyMapRowKey key)
         => _overrideChains.GetValueOrDefault(key) ?? Array.Empty<GalaxyMapRow>();
 
-    /// <summary>
-    /// Adds or replaces a physical row in the writable active layer, then returns
-    /// the newly composed detached effective row.
-    /// </summary>
-    public GalaxyMapRow UpsertActiveRow(GalaxyMapRow row)
-    {
-        ArgumentNullException.ThrowIfNull(row);
-        var layer = ActiveLayer
-            ?? throw new InvalidOperationException("A writable active module is required before editing rows.");
-        var key = row.Key;
-        var physicalRow = GalaxyMapRowCloner.Clone(row);
-        physicalRow.Origin = new GalaxyMapRowOrigin(layer.Module, row.Origin?.OverridesLowerLayer == true);
-        layer.Upsert(physicalRow);
-        Recompose();
-        return Resolve(key)
-               ?? throw new InvalidOperationException($"The effective row {key} could not be resolved after composition.");
-    }
-
-    /// <summary>
-    /// Materialises the effective row as an identical same-ID physical override
-    /// in the active layer. Callers then mutate that physical row, mark its CSV
-    /// column dirty, persist it, and recompose.
-    /// </summary>
-    public GalaxyMapRow MaterializeActiveOverride(GalaxyMapRow effectiveRow)
-    {
-        ArgumentNullException.ThrowIfNull(effectiveRow);
-        var layer = ActiveLayer
-            ?? throw new InvalidOperationException("A writable active module is required before editing rows.");
-        var existing = layer.Find(effectiveRow.Key);
-        if (existing is not null)
-        {
-            return existing;
-        }
-
-        var physicalOverride = GalaxyMapRowCloner.CloneForOverride(effectiveRow, layer.Module);
-        layer.Upsert(physicalOverride);
-        Recompose();
-        return physicalOverride;
-    }
-
     public void Recompose()
     {
         var result = GalaxyMapComposer.Compose(BaseLayer, OrderedModuleLayers());
         EffectiveDocument = result.Document;
         _overrideChains = result.OverrideChains;
+        CompositionRevision++;
     }
 
     private void Mount(GalaxyMapLayer layer, bool recompose)

@@ -6,6 +6,7 @@ using System.Windows;
 using LE1GalaxyMapEditor.Workflows;
 using LE1GalaxyMapEditor.Workflows.Editing;
 using LE1GalaxyMapEditor.Workflows.Ports;
+using LE1GalaxyMapEditor.Workflows.Queries;
 using LE1GalaxyMapEditor.Controls;
 using LE1GalaxyMapEditor.Infrastructure;
 using LE1GalaxyMapEditor.Models;
@@ -15,7 +16,9 @@ using LE1GalaxyMapEditor.Views;
 
 namespace LE1GalaxyMapEditor.ViewModels;
 
-public sealed class MainViewModel : ObservableObject
+public sealed record PlanetDesignerRequestedEventArgs(GalaxyMapRowKey PlanetKey, string ModuleTag);
+
+public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private readonly CsvGalaxyMapLoader _loader;
     private readonly GalaxyMapTextureService _textures;
@@ -31,6 +34,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly PlanetRelationshipWorkflow _planetRelationships;
     private readonly InspectorEditWorkflow _inspectorEdits;
     private readonly RowAuthoringWorkflow _rowAuthoring;
+    private readonly PlanetDesignerWorkflow _planetDesigner;
     private readonly HierarchyNavigationCoordinator _navigation;
 
     private GalaxyMapWorkspace? _workspace;
@@ -41,7 +45,11 @@ public sealed class MainViewModel : ObservableObject
     private bool _isShiftDragMode;
     private CoordinateDragSession? _coordinateDrag;
     private bool _isDiagnosticsPanelOpen;
+    private bool _isTableViewVisible;
+    private bool _isApplyingTableCellEdit;
     private bool _isApplying;
+    private bool _isDisposed;
+    private string _hierarchySearch = string.Empty;
 
     public MainViewModel(
         CsvGalaxyMapLoader loader,
@@ -50,12 +58,13 @@ public sealed class MainViewModel : ObservableObject
         Func<GalaxyMapRow, IReadOnlyList<GalaxyMapModule>, GalaxyMapModule?>? editTargetSelector = null,
         Func<string, bool>? confirmAction = null,
         IEditorDialogs? dialogs = null,
-        IDeferredScheduler? deferredScheduler = null)
+        IDeferredScheduler? deferredScheduler = null,
+        Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null)
     {
         _loader = loader;
         _textures = textures ?? new GalaxyMapTextureService();
         _workspaceStore = workspaceStore ?? new GalaxyMapWorkspaceStore();
-        _dialogs = dialogs ?? new WpfEditorDialogs(editTargetSelector, confirmAction);
+        _dialogs = dialogs ?? new WpfEditorDialogs(editTargetSelector, confirmAction, shaderNameSelector);
         _validation = new ValidationCoordinator(deferredScheduler ?? new DispatcherDeferredScheduler());
         _validation.Completed += ValidationOnCompleted;
         _edits = new EditSessionService(_session, manifestStore: _manifestStore);
@@ -70,7 +79,12 @@ public sealed class MainViewModel : ObservableObject
         _clusterTextures = new ClusterTextureWorkflow(_session, _edits, _textures);
         _planetRelationships = new PlanetRelationshipWorkflow(_session, _edits);
         _inspectorEdits = new InspectorEditWorkflow(_session, _edits);
+        TableViewer = new TableViewerViewModel(
+            new TableProjectionService(_session),
+            ApplyTableCellEdit,
+            () => Workspace?.Modules.Any(module => !module.IsReadOnly && !module.IsBaseGame) == true);
         _rowAuthoring = new RowAuthoringWorkflow(_session, _edits, _inspectorEdits);
+        _planetDesigner = new PlanetDesignerWorkflow(_session, _edits);
         _session.Changed += SessionOnChanged;
         Inspector = new PropertyInspectorViewModel(new MainInspectorPresentationWorkflow(
             _session,
@@ -91,6 +105,7 @@ public sealed class MainViewModel : ObservableObject
             CloneRow,
             DeleteRow,
             MoveRowDialog,
+            RequestPlanetDesigner,
             CanMoveOwnedRow,
             AddChildToHierarchyNode,
             ModelOnPropertyChanged,
@@ -99,7 +114,6 @@ public sealed class MainViewModel : ObservableObject
 
         CreateModuleCommand = new RelayCommand(CreateModuleDialog, () => HasDocument);
         OpenModuleCommand = new RelayCommand(OpenModuleDialog, () => HasDocument);
-        OpenFolderCommand = OpenModuleCommand;
         RefreshRememberedWorkspaceCommand = new RelayCommand(
             () => RefreshRememberedWorkspace(),
             () => HasDocument);
@@ -121,8 +135,8 @@ public sealed class MainViewModel : ObservableObject
             },
             () => CurrentCluster is not null);
         ToggleCoordinateGridCommand = new RelayCommand(ToggleCoordinateGrid);
+        ToggleTableViewCommand = new RelayCommand(ToggleTableView, () => HasDocument);
         ToggleDiagnosticsCommand = new RelayCommand(ToggleDiagnostics);
-        ToggleWarningsCommand = ToggleDiagnosticsCommand;
         NavigateDiagnosticCommand = new RelayCommand<ValidationDiagnostic>(NavigateToDiagnostic);
         CommitCommand = new RelayCommand(() => CommitPendingChanges(), () => HasPendingChanges);
         UndoCommand = new RelayCommand(Undo, () => _edits.CanUndo);
@@ -132,11 +146,24 @@ public sealed class MainViewModel : ObservableObject
     }
 
     public ObservableCollection<HierarchyNodeViewModel> HierarchyRoots => _navigation.HierarchyRoots;
+    public string HierarchySearch
+    {
+        get => _hierarchySearch;
+        set
+        {
+            if (SetProperty(ref _hierarchySearch, value ?? string.Empty))
+            {
+                ApplyHierarchySearch();
+            }
+        }
+    }
+    public event EventHandler<PlanetDesignerRequestedEventArgs>? PlanetDesignerRequested;
     public BulkObservableCollection<GalaxyMapModule> MountedModules { get; } = [];
     public BulkObservableCollection<ModuleBarItemViewModel> ModuleBarItems { get; } = [];
     public ObservableCollection<RowInstanceTabViewModel> RowInstanceTabs => _navigation.RowInstanceTabs;
     public BulkObservableCollection<ValidationDiagnostic> ValidationDiagnostics { get; } = [];
     public PropertyInspectorViewModel Inspector { get; }
+    public TableViewerViewModel TableViewer { get; }
 
     public GalaxyMapWorkspace? Workspace
     {
@@ -209,12 +236,6 @@ public sealed class MainViewModel : ObservableObject
     public int ValidationErrorCount => ValidationDiagnostics.Count(item => item.Severity == ValidationSeverity.Error);
     public int ValidationWarningCount => ValidationDiagnostics.Count(item => item.Severity == ValidationSeverity.Warning);
 
-    // Compatibility aliases retained for the prototype's earlier bindings/tests.
-    public bool HasWarnings => HasDiagnostics;
-    public int WarningCount => DiagnosticCount;
-    public bool IsWarningsPanelOpen => IsDiagnosticsPanelOpen;
-    public string WarningsText => string.Join(Environment.NewLine, ValidationDiagnostics.Select(item => item.ToString()));
-
     public bool IsAddingRelay => PendingRelaySource is not null;
     public string RelayLinkPrompt => _relay.Prompt;
     public string SourceFolder => Workspace is not null
@@ -268,21 +289,30 @@ public sealed class MainViewModel : ObservableObject
     public bool HasActiveCoordinateDrag => _coordinateDrag is not null;
     public string CoordinateGridButtonText => IsCoordinateGridVisible ? "Hide coordinate grid" : "Show coordinate grid";
 
-    public bool IsDiagnosticsPanelOpen
+    public bool IsTableViewVisible
     {
-        get => _isDiagnosticsPanelOpen;
+        get => _isTableViewVisible;
         private set
         {
-            if (SetProperty(ref _isDiagnosticsPanelOpen, value))
+            if (SetProperty(ref _isTableViewVisible, value))
             {
-                OnPropertyChanged(nameof(IsWarningsPanelOpen));
+                OnPropertyChanged(nameof(IsGalaxyViewVisible));
+                OnPropertyChanged(nameof(TableViewToggleText));
             }
         }
     }
 
+    public bool IsGalaxyViewVisible => !IsTableViewVisible;
+    public string TableViewToggleText => IsTableViewVisible ? "View Galaxy Map" : "View 2DA Tables";
+
+    public bool IsDiagnosticsPanelOpen
+    {
+        get => _isDiagnosticsPanelOpen;
+        private set => SetProperty(ref _isDiagnosticsPanelOpen, value);
+    }
+
     public RelayCommand CreateModuleCommand { get; }
     public RelayCommand OpenModuleCommand { get; }
-    public RelayCommand OpenFolderCommand { get; }
     public RelayCommand RefreshRememberedWorkspaceCommand { get; }
     public RelayCommand DismissErrorCommand { get; }
     public RelayCommand AddClusterCommand { get; }
@@ -292,8 +322,8 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand NavigateGalaxyCommand { get; }
     public RelayCommand NavigateClusterCommand { get; }
     public RelayCommand ToggleCoordinateGridCommand { get; }
+    public RelayCommand ToggleTableViewCommand { get; }
     public RelayCommand ToggleDiagnosticsCommand { get; }
-    public RelayCommand ToggleWarningsCommand { get; }
     public RelayCommand<ValidationDiagnostic> NavigateDiagnosticCommand { get; }
     public RelayCommand CommitCommand { get; }
     public RelayCommand UndoCommand { get; }
@@ -315,6 +345,46 @@ public sealed class MainViewModel : ObservableObject
         AttachWorkspace(Workspace!, result.Message);
         ErrorMessage = string.Empty;
         return true;
+    }
+
+    /// <summary>
+    /// Loads BASEGAME and every remembered module as one session and presentation
+    /// transition.
+    /// </summary>
+    public bool LoadRememberedWorkspace()
+        => ApplyRememberedWorkspaceResult(
+            _workspaceWorkflows.LoadRememberedWorkspace(),
+            resetInspectionState: false,
+            startupLoad: true);
+
+    private bool ReloadRememberedWorkspace(bool requireCurrentlyMountedModules = true)
+        => ApplyRememberedWorkspaceResult(
+            _workspaceWorkflows.ReloadRememberedWorkspace(requireCurrentlyMountedModules),
+            resetInspectionState: true,
+            startupLoad: false);
+
+    private bool ApplyRememberedWorkspaceResult(
+        WorkflowResult result,
+        bool resetInspectionState,
+        bool startupLoad)
+    {
+        if (_session.Workspace is null || result.Impact is null)
+        {
+            ErrorMessage = result.Error ?? result.Message;
+            StatusMessage = startupLoad
+                ? "The built-in LE1 galaxy map could not be loaded."
+                : result.Error ?? result.Message;
+            return false;
+        }
+
+        if (resetInspectionState)
+        {
+            _navigation.RestoreInspectionState(null, false);
+        }
+        Workspace = _session.Workspace;
+        AttachWorkspace(Workspace, result.Message);
+        ErrorMessage = result.Error ?? string.Empty;
+        return result.Succeeded;
     }
 
     /// <summary>
@@ -415,7 +485,7 @@ public sealed class MainViewModel : ObservableObject
                 SelectParentFolder: false,
                 FolderPath: folder,
                 SuggestedName: name,
-                SuggestedTag: WorkspaceWorkflowService.SuggestedTag(name),
+                SuggestedTag: GalaxyMapModule.SuggestTag(name),
                 SuggestedReservations: _workspaceWorkflows.InferReservations(folder),
                 SuggestedLoadOrder: _workspaceWorkflows.NextLoadOrder()));
             if (result is not null)
@@ -510,7 +580,7 @@ public sealed class MainViewModel : ObservableObject
             _navigation.RestoreInspectionState(null, false);
         }
 
-        RefreshWorkspace(null, ViewContext.Galaxy, result.Message, recompose: false);
+        RefreshWorkspace(null, ViewContext.Galaxy, result.Message);
         NotifyPendingChanges();
         ErrorMessage = string.Empty;
         return true;
@@ -543,7 +613,7 @@ public sealed class MainViewModel : ObservableObject
             _navigation.PreferredInstanceTag = tag;
         }
 
-        RefreshWorkspace(result.SelectionKey, CaptureView(), result.Message, recompose: false);
+        RefreshWorkspace(result.SelectionKey, CaptureView(), result.Message);
         return true;
     }
 
@@ -637,10 +707,16 @@ public sealed class MainViewModel : ObservableObject
                 request.Destination.Event,
                 request.Destination.ButtonLabel,
                 request.Destination.AddPlotPlanet);
-        ApplyMutationResult(_rowAuthoring.CreatePlanet(
+        var result = _rowAuthoring.CreatePlanet(
             system,
             new PlanetCreationChange(request.Template, request.NameText, request.Name, request.Scale, destination),
-            CaptureHistoryPresentation()));
+            CaptureHistoryPresentation());
+        ApplyMutationResult(result);
+        if (result.Succeeded && result.SelectionKey is { } key &&
+            Workspace?.Resolve(key) is Planet planet && PlanetAppearanceCodec.IsAppearanceCapable(planet))
+        {
+            RequestPlanetDesigner(planet);
+        }
     }
 
     private void CloneRow(GalaxyMapRow source)
@@ -678,7 +754,165 @@ public sealed class MainViewModel : ObservableObject
             return Fail(result.Error ?? result.Message);
         }
         ApplyMutationResult(result);
+        if (result.SelectionKey is { } key && Workspace?.Resolve(key) is Planet planet &&
+            PlanetAppearanceCodec.IsAppearanceCapable(planet))
+        {
+            RequestPlanetDesigner(planet);
+        }
         return true;
+    }
+
+    public PlanetDesignerViewModel CreatePlanetDesigner(GalaxyMapRowKey key, string? moduleTag = null)
+    {
+        if (ResolvePlanetForDesigner(key, moduleTag) is not { } planet)
+        {
+            throw new InvalidOperationException("The selected Planet row is no longer present.");
+        }
+
+        var designer = _planetDesigner.Open(planet);
+        return new PlanetDesignerViewModel(
+            () => Workspace,
+            designer,
+            ApplyPlanetDesigner,
+            UndoPlanetDesigner,
+            RedoPlanetDesigner,
+            () => _edits.CanUndo,
+            () => _edits.CanRedo,
+            ResolvePlanetForDesigner);
+    }
+
+    private Planet? ResolvePlanetForDesigner(GalaxyMapRowKey key, string? moduleTag)
+    {
+        if (Workspace is null)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(moduleTag))
+        {
+            return Workspace.Layers.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Module.Tag, moduleTag, StringComparison.OrdinalIgnoreCase))
+                ?.Find(key) as Planet;
+        }
+
+        return Workspace.Resolve(key) as Planet;
+    }
+
+    private void RequestPlanetDesigner(Planet planet)
+    {
+        if (!PlanetAppearanceCodec.IsAppearanceCapable(planet))
+        {
+            Fail("The Planet Designer is available only for planet material rows.");
+            return;
+        }
+
+        PlanetDesignerRequested?.Invoke(this, new PlanetDesignerRequestedEventArgs(
+            planet.Key,
+            planet.Origin?.ModuleTag ?? GalaxyMapModule.BaseGameTag));
+    }
+
+    private WorkflowResult ApplyPlanetDesigner(PlanetDesignerSession designer)
+    {
+        GalaxyMapModule? targetModule = null;
+        var sourcePlanet = ResolvePlanetForDesigner(designer.Key, designer.ModuleTag);
+        if (sourcePlanet is null)
+        {
+            var missing = WorkflowResult.Failure(
+                "The Planet row is no longer present in the workspace.",
+                designer.Key);
+            ApplyMutationResult(missing);
+            return missing;
+        }
+
+        if (sourcePlanet.Origin?.Module is not { IsReadOnly: false, IsBaseGame: false })
+        {
+            targetModule = ChooseEditTarget(sourcePlanet);
+            if (targetModule is null)
+            {
+                var cancelled = new WorkflowResult(
+                    false,
+                    "Planet appearance apply cancelled; the draft was left unchanged.",
+                    designer.Key);
+                ApplyMutationResult(cancelled);
+                return cancelled;
+            }
+
+            string? ValidateShaderName(string shaderName)
+            {
+                if (Workspace is null)
+                {
+                    return "The galaxy-map workspace is no longer available.";
+                }
+
+                var candidate = designer.Draft.Clone();
+                candidate.Shader = shaderName.Trim();
+                var validation = PlanetShaderNameValidator.Validate(
+                    Workspace,
+                    designer.Key,
+                    candidate,
+                    targetModule.Tag);
+                return validation.IsValid ? null : validation.Message;
+            }
+
+            var suggestedShader = designer.Draft.Shader.Trim();
+            if (string.Equals(suggestedShader, designer.Original.Shader.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                ValidateShaderName(suggestedShader) is not null)
+            {
+                var root = $"{targetModule.Tag}_Planet{designer.Key.RowId}";
+                suggestedShader = root;
+                for (var suffix = 2; ValidateShaderName(suggestedShader) is not null; suffix++)
+                {
+                    suggestedShader = $"{root}_{suffix}";
+                }
+            }
+
+            var shaderRequest = new PlanetShaderNameRequest(
+                designer.DisplayName,
+                designer.Key.RowId,
+                targetModule,
+                suggestedShader,
+                ValidateShaderName);
+            var shaderName = _dialogs.ChoosePlanetShaderName(shaderRequest);
+            if (shaderName is null)
+            {
+                var cancelled = new WorkflowResult(
+                    false,
+                    "Planet appearance apply cancelled; the draft was left unchanged.",
+                    designer.Key);
+                ApplyMutationResult(cancelled);
+                return cancelled;
+            }
+
+            if (ValidateShaderName(shaderName) is { } shaderError)
+            {
+                var invalid = WorkflowResult.Failure(shaderError, designer.Key);
+                ApplyMutationResult(invalid);
+                return invalid;
+            }
+
+            designer.Draft.Shader = shaderName.Trim();
+        }
+
+        var result = _planetDesigner.Apply(
+            designer,
+            CaptureHistoryPresentation(designer.Key),
+            targetModule);
+        ApplyMutationResult(result);
+        return result;
+    }
+
+    private bool UndoPlanetDesigner(GalaxyMapRowKey key)
+    {
+        var result = _edits.Undo(CaptureHistoryPresentation(key));
+        ApplyHistoryRestore(result);
+        return result.Succeeded;
+    }
+
+    private bool RedoPlanetDesigner(GalaxyMapRowKey key)
+    {
+        var result = _edits.Redo(CaptureHistoryPresentation(key));
+        ApplyHistoryRestore(result);
+        return result.Succeeded;
     }
 
     private void ToggleCoordinateGrid() => IsCoordinateGridVisible = !IsCoordinateGridVisible;
@@ -794,7 +1028,6 @@ public sealed class MainViewModel : ObservableObject
             result.SelectionKey,
             session.View,
             result.Message,
-            recompose: false,
             preserveHierarchy: true,
             refreshModules: false,
             deferValidation: true);
@@ -845,11 +1078,31 @@ public sealed class MainViewModel : ObservableObject
         IsDiagnosticsPanelOpen = HasDiagnostics && !IsDiagnosticsPanelOpen;
     }
 
+    private void ToggleTableView()
+    {
+        if (!HasDocument)
+        {
+            return;
+        }
+
+        IsTableViewVisible = !IsTableViewVisible;
+        if (IsTableViewVisible)
+        {
+            TableViewer.RefreshIfNeeded();
+        }
+    }
+
     public bool CommitPendingChanges()
     {
-        var result = _edits.Commit();
+        var selectionKey = _navigation.SelectedKey;
+        var view = CaptureView();
+        var result = _edits.Commit(_workspaceWorkflows.RememberCurrentWorkspace);
         if (!result.Succeeded)
         {
+            if (result.Impact is not null && Workspace is not null)
+            {
+                RefreshWorkspace(selectionKey, view, null);
+            }
             NotifyPendingChanges();
             return Fail(result.Error ?? result.Message);
         }
@@ -859,15 +1112,7 @@ public sealed class MainViewModel : ObservableObject
             return true;
         }
 
-        try
-        {
-            _workspaceWorkflows.RememberCurrentWorkspace();
-        }
-        catch (Exception exception) when (IsExpectedOperationFailure(exception))
-        {
-            return Fail($"Module files were committed, but the remembered workspace could not be updated: {exception.Message}");
-        }
-        RefreshWorkspace(_navigation.SelectedKey, CaptureView(), result.Message, recompose: false);
+        RefreshWorkspace(_navigation.SelectedKey, CaptureView(), result.Message);
         ErrorMessage = string.Empty;
         NotifyPendingChanges();
         return true;
@@ -880,46 +1125,41 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        _edits.DiscardChangeState();
-        _navigation.RestoreInspectionState(null, false);
-        NotifyPendingChanges();
-        LoadBuiltIn();
-        RestoreRememberedModules();
+        var revision = _session.Revision;
+        ReloadRememberedWorkspace();
+        if (_session.Revision == revision)
+        {
+            return;
+        }
         StatusMessage = "Discarded all uncommitted changes.";
     }
 
-    public bool RestoreRememberedModules()
+    /// <summary>
+    /// Abandons process-local edit state when the application is committed to
+    /// shutting down. This deliberately does not publish, recompose, validate, or
+    /// rebuild presentation state: the remaining in-memory workspace is not safe to
+    /// continue editing and is about to be released with the window.
+    /// </summary>
+    public void AbandonPendingChangesForShutdown()
     {
-        var result = _workspaceWorkflows.RestoreRememberedModules();
-        if (_session.Workspace is null)
-        {
-            return Fail(result.Error ?? result.Message);
-        }
-
-        Workspace = _session.Workspace;
-        RefreshWorkspace(null, ViewContext.Galaxy, result.Message, recompose: false);
-        ErrorMessage = result.Error ?? string.Empty;
-        return result.Succeeded;
+        _validation.Cancel();
+        ClearTransientEditState();
     }
 
     public bool RefreshRememberedWorkspace()
     {
-        if (HasPendingChanges && !Confirm(
+        var protectLiveEdits = HasPendingChanges;
+        if (protectLiveEdits && !Confirm(
                 "Refreshing reloads BASEGAME and every module remembered in workspace.json. Discard all uncommitted changes?"))
         {
             StatusMessage = "Refresh cancelled; staged changes were left intact.";
             return false;
         }
 
-        _edits.DiscardChangeState();
-        _navigation.RestoreInspectionState(null, false);
-        NotifyPendingChanges();
-        if (!LoadBuiltIn())
-        {
-            return false;
-        }
-
-        var restoredCleanly = RestoreRememberedModules();
+        // With no staged data at risk, Refresh follows workspace.json as the
+        // authority and may intentionally unmount an externally removed entry.
+        var restoredCleanly = ReloadRememberedWorkspace(
+            requireCurrentlyMountedModules: protectLiveEdits);
         if (restoredCleanly)
         {
             StatusMessage = Workspace?.ModuleLayers.Count > 0
@@ -928,6 +1168,12 @@ public sealed class MainViewModel : ObservableObject
         }
 
         return restoredCleanly;
+    }
+
+    private void ClearTransientEditState()
+    {
+        _session.Changes.Clear();
+        _edits.ClearHistory();
     }
 
     private GalaxyMapModule? ChooseEditTarget(GalaxyMapRow row)
@@ -950,7 +1196,7 @@ public sealed class MainViewModel : ObservableObject
         return _dialogs.ChooseEditTarget(row, candidates, ActiveModule);
     }
 
-    private GalaxyMapModule? ResolveWritableTarget(GalaxyMapRow row)
+    private GalaxyMapModule? ResolveWritableTarget(GalaxyMapRow row, bool preferActiveModule = false)
     {
         if (Workspace is null)
         {
@@ -963,11 +1209,17 @@ public sealed class MainViewModel : ObservableObject
                 string.Equals(module.Tag, origin.Tag, StringComparison.OrdinalIgnoreCase));
         }
 
+        if (preferActiveModule && ActiveModule is { IsReadOnly: false, IsBaseGame: false } active)
+        {
+            return active;
+        }
+
         return ChooseEditTarget(row);
     }
 
     private void SessionOnChanged(object? sender, SessionChangedEventArgs eventArgs)
     {
+        TableViewer.Invalidate(eventArgs.Impact);
         if (!ReferenceEquals(_workspace, _session.Workspace))
         {
             Workspace = _session.Workspace;
@@ -992,6 +1244,16 @@ public sealed class MainViewModel : ObservableObject
         AddSystemCommand.RaiseCanExecuteChanged();
         AddPlanetCommand.RaiseCanExecuteChanged();
         ContextualAddCommand.RaiseCanExecuteChanged();
+        ApplyHierarchySearch();
+    }
+
+    private void ApplyHierarchySearch()
+    {
+        var terms = HierarchySearch.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var root in HierarchyRoots)
+        {
+            root.ApplySearch(terms);
+        }
     }
 
     private void RelayStateOnChanged(object? sender, EventArgs eventArgs)
@@ -1020,8 +1282,7 @@ public sealed class MainViewModel : ObservableObject
         RefreshWorkspace(
             result.SelectionKey,
             new ViewContext(navigation.ClusterRowId, navigation.SystemRowId),
-            result.Message,
-            recompose: false);
+            result.Message);
         OnActiveModuleChanged();
         ErrorMessage = string.Empty;
     }
@@ -1121,8 +1382,7 @@ public sealed class MainViewModel : ObservableObject
     private void AttachWorkspace(GalaxyMapWorkspace workspace, string status)
     {
         Workspace = workspace;
-        RefreshWorkspace(null, ViewContext.Galaxy, status, recompose: false);
-        RaiseCommandStates();
+        RefreshWorkspace(null, ViewContext.Galaxy, status);
     }
 
     private bool ApplyWorkspaceResult(WorkflowResult result)
@@ -1137,8 +1397,7 @@ public sealed class MainViewModel : ObservableObject
         RefreshWorkspace(
             result.SelectionKey,
             new ViewContext(navigation.ClusterRowId, navigation.SystemRowId),
-            result.Message,
-            recompose: false);
+            result.Message);
         ErrorMessage = string.Empty;
         return true;
     }
@@ -1147,7 +1406,6 @@ public sealed class MainViewModel : ObservableObject
         GalaxyMapRowKey? selectionKey,
         ViewContext view,
         string? status,
-        bool recompose = true,
         bool preserveHierarchy = false,
         bool refreshModules = true,
         bool deferValidation = false)
@@ -1157,10 +1415,6 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
-        if (recompose)
-        {
-            Workspace.Recompose();
-        }
         if (refreshModules)
         {
             RefreshMountedModules();
@@ -1196,6 +1450,11 @@ public sealed class MainViewModel : ObservableObject
             selectionKey,
             new NavigationTarget(view.ClusterRowId, view.SystemRowId),
             preserveHierarchy);
+
+        if (IsTableViewVisible && !_isApplyingTableCellEdit)
+        {
+            TableViewer.RefreshIfNeeded();
+        }
 
         NavigateGalaxyCommand.RaiseCanExecuteChanged();
     }
@@ -1258,7 +1517,7 @@ public sealed class MainViewModel : ObservableObject
         }
 
         _navigation.PreferredInstanceTag = ActiveModule?.Tag;
-        RefreshWorkspace(result.SelectionKey, CaptureView(), result.Message, recompose: false);
+        RefreshWorkspace(result.SelectionKey, CaptureView(), result.Message);
         return true;
     }
 
@@ -1558,6 +1817,58 @@ public sealed class MainViewModel : ObservableObject
         }
         return true;
     }
+
+    private WorkflowResult ApplyTableCellEdit(GalaxyMapRowKey key, string column, string token)
+    {
+        var row = Workspace?.Resolve(key);
+        if (row is null)
+        {
+            return WorkflowResult.Failure($"{key.Table} row {key.RowId} is no longer present.", key);
+        }
+
+        var target = ResolveWritableTarget(row, preferActiveModule: true);
+        if (target is null)
+        {
+            var message = HasError
+                ? ErrorMessage
+                : "Cell edit cancelled; the source row was left unchanged.";
+            return WorkflowResult.Failure(message, key);
+        }
+
+        var view = CaptureView();
+        _isApplyingTableCellEdit = true;
+        try
+        {
+            var result = _inspectorEdits.ApplyTableCellEdit(
+                row,
+                column,
+                token,
+                target,
+                CaptureHistoryPresentation(key, view));
+            if (!result.Succeeded)
+            {
+                StatusMessage = result.Error ?? result.Message;
+                return result;
+            }
+
+            _navigation.PreferredInstanceTag = target.Tag;
+            RefreshWorkspace(
+                key,
+                view,
+                result.Message,
+                preserveHierarchy: result.Impact?.IsStructural != true,
+                refreshModules: false,
+                deferValidation: true);
+            OnActiveModuleChanged();
+            ErrorMessage = string.Empty;
+            return result;
+        }
+        finally
+        {
+            _isApplyingTableCellEdit = false;
+        }
+    }
+
     private void ModelOnPropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
     {
         if (_isApplying || _edits.IsApplying || sender is not GalaxyMapRow row ||
@@ -1592,7 +1903,7 @@ public sealed class MainViewModel : ObservableObject
         {
             _edits.CancelUserEdit();
             Workspace.Recompose();
-            RefreshWorkspace(selectionKey, view, null, recompose: false);
+            RefreshWorkspace(selectionKey, view, null);
             if (!HasError)
             {
                 StatusMessage = "Edit cancelled; the source row was left unchanged.";
@@ -1607,7 +1918,7 @@ public sealed class MainViewModel : ObservableObject
             CaptureHistoryPresentation(selectionKey, view));
         if (!result.Succeeded)
         {
-            RefreshWorkspace(selectionKey, view, null, recompose: false);
+            RefreshWorkspace(selectionKey, view, null);
             Fail(result.Error ?? result.Message);
             return;
         }
@@ -1617,7 +1928,6 @@ public sealed class MainViewModel : ObservableObject
             selectionKey,
             view,
             result.Message,
-            recompose: false,
             preserveHierarchy: true,
             refreshModules: false,
             deferValidation: true);
@@ -1639,9 +1949,6 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(DiagnosticCount));
         OnPropertyChanged(nameof(ValidationErrorCount));
         OnPropertyChanged(nameof(ValidationWarningCount));
-        OnPropertyChanged(nameof(HasWarnings));
-        OnPropertyChanged(nameof(WarningCount));
-        OnPropertyChanged(nameof(WarningsText));
         if (!HasDiagnostics)
         {
             IsDiagnosticsPanelOpen = false;
@@ -1715,6 +2022,7 @@ public sealed class MainViewModel : ObservableObject
         CreateModuleCommand.RaiseCanExecuteChanged();
         OpenModuleCommand.RaiseCanExecuteChanged();
         RefreshRememberedWorkspaceCommand.RaiseCanExecuteChanged();
+        ToggleTableViewCommand.RaiseCanExecuteChanged();
         AddClusterCommand.RaiseCanExecuteChanged();
         AddSystemCommand.RaiseCanExecuteChanged();
         AddPlanetCommand.RaiseCanExecuteChanged();
@@ -1798,8 +2106,7 @@ public sealed class MainViewModel : ObservableObject
         RefreshWorkspace(
             presentation.SelectionKey,
             new ViewContext(presentation.Navigation.ClusterRowId, presentation.Navigation.SystemRowId),
-            result.Message,
-            recompose: false);
+            result.Message);
         NotifyPendingChanges();
         NotifyHistoryChanged();
     }
@@ -1810,6 +2117,22 @@ public sealed class MainViewModel : ObservableObject
         {
             DiscardPendingChanges();
         }
+    }
+
+    public void Dispose()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        _isDisposed = true;
+        _validation.Completed -= ValidationOnCompleted;
+        _validation.Dispose();
+        _session.Changed -= SessionOnChanged;
+        _relay.StateChanged -= RelayStateOnChanged;
+        _navigation.Changed -= NavigationOnChanged;
+        _navigation.Dispose();
     }
 
     private bool Confirm(string message)

@@ -1,5 +1,6 @@
 using System.Globalization;
 using LE1GalaxyMapEditor.Models;
+using LE1GalaxyMapEditor.Services;
 
 namespace LE1GalaxyMapEditor.Workflows.Editing;
 
@@ -11,19 +12,7 @@ public sealed record MoveParentChange(
 
 public sealed record InspectorEditResult(bool Handled, WorkflowResult? Result = null);
 
-public interface IInspectorWorkflow
-{
-    bool IsManaged(GalaxyMapRow row, string propertyName, object? value);
-    string? ValidateEdit(GalaxyMapRow row, string propertyName, object? value);
-    InspectorEditResult ApplyEdit(
-        GalaxyMapRow row,
-        string propertyName,
-        object? value,
-        GalaxyMapModule target,
-        HistoryPresentationState presentation);
-}
-
-public sealed class InspectorEditWorkflow(EditorSession session, EditSessionService edits) : IInspectorWorkflow
+public sealed class InspectorEditWorkflow(EditorSession session, EditSessionService edits)
 {
     public const string MoveParentProperty = "MoveParent";
 
@@ -283,6 +272,73 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
             presentation,
             $"Staged {row.Table} row {row.RowId} in {target.Tag}.",
             IsStructural: false));
+    }
+
+    /// <summary>
+    /// Applies an editable table cell through the same validation, target-layer,
+    /// dependent-row, history and dirty-column machinery used by the inspector.
+    /// </summary>
+    public WorkflowResult ApplyTableCellEdit(
+        GalaxyMapRow inspectedRow,
+        string column,
+        string token,
+        GalaxyMapModule target,
+        HistoryPresentationState presentation)
+    {
+        var workspace = session.Workspace;
+        if (workspace is null)
+        {
+            return WorkflowResult.Failure("This table is a read-only reference view.", inspectedRow.Key);
+        }
+
+        if (!GalaxyMapRowValueAccessor.TryParse(inspectedRow, column, token, out var value, out var parseError))
+        {
+            return WorkflowResult.Failure(parseError ?? $"{column} is not a valid value.", inspectedRow.Key);
+        }
+
+        var propertyName = GalaxyMapRowValueAccessor.PropertyName(inspectedRow, column);
+        if (ValidateEdit(inspectedRow, propertyName, value) is { } validationError)
+        {
+            return WorkflowResult.Failure(validationError, inspectedRow.Key);
+        }
+
+        if (ValuesEqual(GalaxyMapRowValueAccessor.GetValue(inspectedRow, column), value))
+        {
+            return WorkflowResult.Success(
+                $"{inspectedRow.Table} row {inspectedRow.RowId} was already set to that value.",
+                inspectedRow.Key,
+                presentation.Navigation,
+                ChangeImpact.Empty);
+        }
+
+        if (IsManaged(inspectedRow, propertyName, value))
+        {
+            var managed = ApplyEdit(inspectedRow, propertyName, value, target, presentation);
+            return managed.Handled
+                ? managed.Result ?? WorkflowResult.Failure("The managed cell edit produced no result.", inspectedRow.Key)
+                : WorkflowResult.Failure($"{column} could not be edited through its managed workflow.", inspectedRow.Key);
+        }
+
+        workspace.SetActiveModule(target);
+        var layer = workspace.ActiveLayer!;
+        var existing = layer.Find(inspectedRow.Key);
+        var staged = existing is not null
+            ? GalaxyMapRowCloner.Clone(existing)
+            : GalaxyMapRowCloner.CloneForOverride(inspectedRow, target);
+        staged.Origin = new GalaxyMapRowOrigin(target, workspace.GetOverrideChain(inspectedRow.Key).Any(candidate =>
+            !string.Equals(candidate.Origin?.ModuleTag, target.Tag, StringComparison.OrdinalIgnoreCase)));
+        GalaxyMapRowValueAccessor.SetValue(staged, column, value);
+        GalaxyMapRowAuthoring.EnsureSnapshot(staged).MarkDirty(column);
+
+        var structural = propertyName is nameof(Planet.MapRowId) or
+            nameof(RelayConnection.StartClusterEncoded) or nameof(RelayConnection.EndClusterEncoded);
+        return edits.ExecuteMutation(new EditMutationRequest(
+            [inspectedRow.Key],
+            [inspectedRow.Table],
+            () => layer.Upsert(staged),
+            presentation,
+            $"Updated {inspectedRow.Table} row {inspectedRow.RowId}, column {column}, in {target.Tag}.",
+            IsStructural: structural));
     }
 
     public InspectorEditResult ApplyEdit(
@@ -596,6 +652,11 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
             suffix > 0 && suffix <= int.MaxValue / 10_000 &&
             suffix * 10_000 == encoded) == 1;
     }
+
+    private static bool ValuesEqual(object? left, object? right)
+        => left is double leftNumber && right is double rightNumber
+            ? leftNumber.Equals(rightNumber)
+            : Equals(left, right);
 
     private static bool TryCalculateActiveWorld(
         string clusterLabel,

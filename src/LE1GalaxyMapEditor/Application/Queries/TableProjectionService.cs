@@ -43,10 +43,24 @@ public sealed class TableProjectionService(EditorSession session)
         var workspace = session.Workspace;
         if (workspace is null)
         {
-            return new MergedTableSnapshot(table, CanonicalColumns(table), [], session.Revision);
+            var document = session.Document;
+            if (document is null)
+            {
+                return new MergedTableSnapshot(table, CanonicalColumns(table), [], session.Revision);
+            }
+
+            var referenceColumns = Columns(document, table);
+            var referenceRows = EffectiveRows(document, table)
+                .OrderBy(row => row.RowId)
+                .Select(row => ProjectReferenceRow(row, referenceColumns))
+                .ToArray();
+            return new MergedTableSnapshot(table, referenceColumns, referenceRows, session.Revision);
         }
 
-        var columns = Columns(workspace, table);
+        // Writable module CSVs are accepted only when their header count, names and
+        // order match the canonical 2DA schema. Do not manufacture editable columns
+        // from malformed in-memory rows: Legendary Explorer could not import them.
+        var columns = CanonicalColumns(table);
         var rows = EffectiveRows(workspace.EffectiveDocument, table)
             .OrderBy(row => row.RowId)
             .Select(row => ProjectRow(workspace, row, columns))
@@ -63,18 +77,18 @@ public sealed class TableProjectionService(EditorSession session)
         var winningModule = chain.LastOrDefault()?.Origin?.Module ??
                             effectiveRow.Origin?.Module ??
                             GalaxyMapModule.BaseGame;
-        var isStaged = session.Changes.DirtyTables.TryGetValue(winningModule.Tag, out var dirtyTables) &&
-                       dirtyTables.Contains(effectiveRow.Table);
+        var tableIsStaged = session.Changes.DirtyTables.TryGetValue(winningModule.Tag, out var dirtyTables) &&
+                            dirtyTables.Contains(effectiveRow.Table);
         var cells = new Dictionary<string, MergedTableCell>(StringComparer.OrdinalIgnoreCase);
         foreach (var column in columns)
         {
             var instances = chain.Select(row =>
             {
-                var raw = GalaxyMapRowValues.RawValue(row, column.Name);
+                var raw = GalaxyMapRowValueAccessor.GetValue(row, column.Name);
                 var module = row.Origin?.Module ?? GalaxyMapModule.BaseGame;
                 return new CellInstanceValue(raw, Display(raw), module.Tag, module.Color);
             }).ToArray();
-            var rawValue = GalaxyMapRowValues.RawValue(effectiveRow, column.Name);
+            var rawValue = GalaxyMapRowValueAccessor.GetValue(effectiveRow, column.Name);
             var differs = instances.Length > 1 && !ValuesEqual(
                 instances[^1].RawValue,
                 instances[^2].RawValue);
@@ -83,7 +97,7 @@ public sealed class TableProjectionService(EditorSession session)
                 rawValue,
                 winningModule.Tag,
                 winningModule.Color,
-                isStaged,
+                tableIsStaged && effectiveRow.CsvSnapshot?.IsDirty(column.Name) == true,
                 differs,
                 instances);
         }
@@ -91,15 +105,39 @@ public sealed class TableProjectionService(EditorSession session)
         return new MergedTableRow(effectiveRow.Key, cells);
     }
 
-    private static IReadOnlyList<TableColumn> Columns(GalaxyMapWorkspace workspace, GalaxyMapTable table)
+    private static MergedTableRow ProjectReferenceRow(
+        GalaxyMapRow row,
+        IReadOnlyList<TableColumn> columns)
+    {
+        var module = row.Origin?.Module ?? GalaxyMapModule.BaseGame;
+        var cells = columns.ToDictionary(
+            column => column.Name,
+            column =>
+            {
+                var raw = GalaxyMapRowValueAccessor.GetValue(row, column.Name);
+                var instance = new CellInstanceValue(raw, Display(raw), module.Tag, module.Color);
+                return new MergedTableCell(
+                    instance.DisplayValue,
+                    raw,
+                    module.Tag,
+                    module.Color,
+                    IsStaged: false,
+                    DiffersFromLowerInstance: false,
+                    [instance]);
+            },
+            StringComparer.OrdinalIgnoreCase);
+        return new MergedTableRow(row.Key, cells);
+    }
+
+    private static IReadOnlyList<TableColumn> Columns(GalaxyMapDocument document, GalaxyMapTable table)
     {
         var canonical = CanonicalColumns(table);
         var names = canonical.Select(column => column.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var result = canonical.ToList();
-        foreach (var layer in workspace.Layers)
+        foreach (var row in EffectiveRows(document, table))
         {
-            var schemaHeaders = layer.GetSchema(table)?.Headers ?? [];
-            foreach (var header in schemaHeaders.Concat(layer.Rows(table).SelectMany(row => row.ExtraFieldOrder)))
+            var headers = row.CsvSnapshot?.Headers ?? [];
+            foreach (var header in headers.Concat(row.ExtraFieldOrder))
             {
                 var name = string.IsNullOrWhiteSpace(header) ? CsvRowSnapshot.RowIdColumnName : header;
                 if (names.Add(name))
@@ -144,103 +182,4 @@ public sealed class TableProjectionService(EditorSession session)
         IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
         _ => value.ToString() ?? string.Empty
     };
-}
-
-internal static class GalaxyMapRowValues
-{
-    public static object? RawValue(GalaxyMapRow row, string column)
-    {
-        if (string.Equals(column, CsvRowSnapshot.RowIdColumnName, StringComparison.OrdinalIgnoreCase))
-        {
-            return row.RowId;
-        }
-
-        var known = row switch
-        {
-            Cluster cluster => ClusterValue(cluster, column),
-            GalaxySystem system => SystemValue(system, column),
-            Planet planet => PlanetValue(planet, column),
-            PlotPlanetEntry plotPlanet => PlotPlanetValue(plotPlanet, column),
-            MapEntry map => MapValue(map, column),
-            RelayConnection relay => RelayValue(relay, column),
-            _ => Missing.Value
-        };
-        return ReferenceEquals(known, Missing.Value)
-            ? row.ExtraFields.GetValueOrDefault(column)
-            : known;
-    }
-
-    private static object? ClusterValue(Cluster row, string column) => column.ToUpperInvariant() switch
-    {
-        "LABEL" => row.Label,
-        "X" => row.X,
-        "Y" => row.Y,
-        "NAME" => row.Name,
-        "NAMETEXT" => row.NameText,
-        "SPHERESIZE" => row.SphereSize,
-        "BACKGROUND" => row.Background,
-        _ => Missing.Value
-    };
-
-    private static object? SystemValue(GalaxySystem row, string column) => column.ToUpperInvariant() switch
-    {
-        "LABEL" => row.Label,
-        "CLUSTER" => row.ClusterRowId,
-        "X" => row.X,
-        "Y" => row.Y,
-        "NAME" => row.Name,
-        "NAMETEXT" => row.NameText,
-        "SCALE" => row.Scale,
-        "SHOWNEBULA" => row.ShowNebula,
-        _ => Missing.Value
-    };
-
-    private static object? PlanetValue(Planet row, string column) => column.ToUpperInvariant() switch
-    {
-        "LABEL" => row.Label,
-        "SYSTEM" => row.SystemRowId,
-        "X" => row.X,
-        "Y" => row.Y,
-        "NAME" => row.Name,
-        "NAMETEXT" => row.NameText,
-        "ACTIVEWORLD" => row.ActiveWorld,
-        "DESCRIPTION" => row.Description,
-        "BUTTONLABEL" => row.ButtonLabel,
-        "MAP" => row.MapRowId,
-        "SCALE" => row.Scale,
-        "RINGCOLOR" => row.RingColor,
-        "ORBITRING" => row.OrbitRing,
-        "SYSTEMLEVELTYPE" => row.SystemLevelType,
-        "PLANETLEVELTYPE" => row.PlanetLevelType,
-        "EVENT" => row.Event,
-        "IMAGEINDEX" => row.ImageIndex,
-        _ => Missing.Value
-    };
-
-    private static object? PlotPlanetValue(PlotPlanetEntry row, string column) => column.ToUpperInvariant() switch
-    {
-        "CODE" => row.Code,
-        "NAME" => row.Name,
-        "NAMETEXT" => row.NameText,
-        _ => Missing.Value
-    };
-
-    private static object? MapValue(MapEntry row, string column) => column.ToUpperInvariant() switch
-    {
-        "MAP" => row.MapName,
-        "STARTPOINT" => row.StartPoint,
-        _ => Missing.Value
-    };
-
-    private static object? RelayValue(RelayConnection row, string column) => column.ToUpperInvariant() switch
-    {
-        "STARTCLUSTER" => row.StartClusterEncoded,
-        "ENDCLUSTER" => row.EndClusterEncoded,
-        _ => Missing.Value
-    };
-
-    private static class Missing
-    {
-        public static readonly object Value = new();
-    }
 }

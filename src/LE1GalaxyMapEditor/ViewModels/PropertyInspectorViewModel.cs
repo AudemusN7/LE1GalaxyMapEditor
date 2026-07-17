@@ -77,7 +77,10 @@ public sealed class InspectorFieldViewModel : ObservableObject
             if (Name.Equals("RingColor", StringComparison.OrdinalIgnoreCase) && packed == -1)
                 return Brushes.Transparent;
             var argb = unchecked((uint)packed);
-            return new SolidColorBrush(Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb));
+            // Galaxy-map packed colours commonly leave the high alpha byte at
+            // zero. Alpha is data that must be preserved, but a transparent
+            // UI swatch only reveals the navy control background.
+            return new SolidColorBrush(Color.FromRgb((byte)(argb >> 16), (byte)(argb >> 8), (byte)argb));
         }
     }
 
@@ -413,13 +416,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             "EventTransitionParameter", "EventMessage"
         };
         var destinationInternals = new[] { "ExitMap", "PlanetRotation" };
-        var appearanceStart = Array.FindIndex(names,
-            name => string.Equals(name, "Shader", StringComparison.OrdinalIgnoreCase));
-        var appearanceEnd = Array.FindIndex(names,
-            name => string.Equals(name, "Corona_ColorA", StringComparison.OrdinalIgnoreCase));
-        var appearance = appearanceStart >= 0 && appearanceEnd >= appearanceStart
-            ? names.Skip(appearanceStart).Take(appearanceEnd - appearanceStart + 1).ToArray()
-            : [];
+        var appearance = names.Where(PlanetAppearanceSchema.IsAppearanceColumn).ToArray();
 
         AddExtraFields(row, "Visibility and usability", availability,
             detail: "Visibility, object interaction and use-button rules are independent three-part rules.");
@@ -427,8 +424,6 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             detail: "Rare or unverified fields kept available without cluttering routine editing.");
         AddExtraFields(row, "Legacy event routing", legacyEvents, isExpanded: false,
             detail: "Unused by vanilla; Remote Event handles normal destination behaviour.");
-        AddExtraFields(row, "Planet appearance", appearance, isExpanded: false,
-            detail: "Shader and material parameters. Preserved exactly when cloning.");
         AddRemainingExtraFields(row, "Advanced Planet fields",
             availability.Concat(destinationInternals).Concat(legacyEvents).Concat(appearance), isExpanded: false);
     }

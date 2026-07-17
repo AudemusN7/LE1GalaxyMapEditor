@@ -260,6 +260,11 @@ public sealed class RelayWorkflow(EditorSession session, EditSessionService edit
 
     private void SetState(RelayWorkflowState state)
     {
+        if (State == state)
+        {
+            return;
+        }
+
         State = state;
         StateChanged?.Invoke(this, EventArgs.Empty);
     }

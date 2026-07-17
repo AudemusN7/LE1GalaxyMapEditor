@@ -115,7 +115,7 @@ public sealed partial class GalaxyMapModule
     {
         Name = RequireValue(name, nameof(name));
         Tag = RequireValue(tag, nameof(tag)).ToUpperInvariant();
-        if (!TagPattern().IsMatch(Tag))
+        if (!IsValidTag(Tag))
         {
             throw new ArgumentException(
                 "A module tag must contain only letters, numbers, underscores, or hyphens.", nameof(tag));
@@ -184,6 +184,29 @@ public sealed partial class GalaxyMapModule
     }
 
     public override string ToString() => $"{Name} [{Tag}]";
+
+    public static bool IsValidTag(string? value)
+        => !string.IsNullOrWhiteSpace(value) &&
+           TagPattern().IsMatch(value.Trim().ToUpperInvariant());
+
+    public static string SuggestTag(string? value)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (var character in (value ?? string.Empty).Trim().ToUpperInvariant())
+        {
+            if (character is >= 'A' and <= 'Z' or >= '0' and <= '9' or '_' or '-')
+            {
+                builder.Append(character);
+            }
+            else if (builder.Length > 0 && builder[^1] != '_')
+            {
+                builder.Append('_');
+            }
+        }
+
+        var tag = builder.ToString().Trim('_', '-');
+        return tag.Length == 0 ? "MODULE" : tag;
+    }
 
     private static string RequireValue(string value, string parameterName)
         => string.IsNullOrWhiteSpace(value)

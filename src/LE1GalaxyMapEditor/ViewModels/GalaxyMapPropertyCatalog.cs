@@ -1,5 +1,6 @@
 using System.Text;
 using LE1GalaxyMapEditor.Models;
+using LE1GalaxyMapEditor.Services;
 
 namespace LE1GalaxyMapEditor.ViewModels;
 
@@ -62,7 +63,7 @@ public static class GalaxyMapPropertyCatalog
             (GalaxyMapTable.Relay, "STARTCLUSTER") => new("Start Cluster", "Confirmed: encoded Cluster label suffix × 10,000."),
             (GalaxyMapTable.Relay, "ENDCLUSTER") => new("End Cluster", "Confirmed: encoded Cluster label suffix × 10,000."),
             (GalaxyMapTable.PlotPlanet, "CODE") => new("ActiveWorld code", "Derived: must equal the linked Planet's ActiveWorld value."),
-            (GalaxyMapTable.Planet, _) when IsAppearanceColumn(column) =>
+            (GalaxyMapTable.Planet, _) when PlanetAppearanceSchema.IsAppearanceColumn(column) =>
                 new(CompactAppearanceName(column), $"Experimental: Planet shader/appearance parameter. Exact rendering behaviour is not yet documented. Raw column: {column}."),
             _ => new(Humanize(column), "Advanced 2DA field. Its precise runtime behaviour has not yet been documented by this editor.")
         };
@@ -97,9 +98,6 @@ public static class GalaxyMapPropertyCatalog
         metadata = null!;
         return false;
     }
-
-    private static bool IsAppearanceColumn(string column)
-        => column.Equals("Shader", StringComparison.OrdinalIgnoreCase) || column.Contains('_');
 
     private static string LegacyEventName(string column) => column.ToUpperInvariant() switch
     {

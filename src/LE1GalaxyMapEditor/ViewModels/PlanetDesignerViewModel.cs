@@ -1,0 +1,707 @@
+using System.Collections.ObjectModel;
+using System.Globalization;
+using System.IO;
+using System.Windows.Media;
+using LE1GalaxyMapEditor.Infrastructure;
+using LE1GalaxyMapEditor.Models;
+using LE1GalaxyMapEditor.Services;
+using LE1GalaxyMapEditor.Workflows;
+using LE1GalaxyMapEditor.Workflows.Editing;
+
+namespace LE1GalaxyMapEditor.ViewModels;
+
+public sealed class PlanetAppearanceComponentViewModel : ObservableObject
+{
+    private readonly PlanetAppearance _appearance;
+    private readonly bool _numeric;
+    private readonly bool _textureReference;
+    private readonly Action _changed;
+    private string _validationError = string.Empty;
+
+    public PlanetAppearanceComponentViewModel(
+        PlanetAppearance appearance,
+        string column,
+        string label,
+        bool numeric,
+        bool textureReference,
+        Action changed)
+    {
+        _appearance = appearance;
+        Column = column;
+        Label = label;
+        _numeric = numeric;
+        _textureReference = textureReference;
+        _changed = changed;
+    }
+
+    public string Column { get; }
+    public string Label { get; }
+    public string Value
+    {
+        get => _textureReference
+            ? PlanetAppearanceCodec.TextureDisplayName(_appearance[Column])
+            : _appearance[Column];
+        set
+        {
+            value ??= string.Empty;
+            if (string.Equals(Value, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _appearance[Column] = value;
+            Validate();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(NumericValue));
+            _changed();
+        }
+    }
+
+    public double NumericValue
+    {
+        get => PlanetAppearanceCodec.TryParseFloat(Value, out var value) ? value : 0;
+        set => Value = PlanetAppearanceCodec.Format((float)value);
+    }
+
+    public string ValidationError
+    {
+        get => _validationError;
+        private set
+        {
+            if (SetProperty(ref _validationError, value))
+            {
+                OnPropertyChanged(nameof(HasError));
+            }
+        }
+    }
+
+    public bool HasError => ValidationError.Length > 0;
+
+    public void Refresh()
+    {
+        Validate();
+        OnPropertyChanged(nameof(Value));
+        OnPropertyChanged(nameof(NumericValue));
+    }
+
+    private void Validate()
+    {
+        ValidationError = _numeric && !PlanetAppearanceCodec.TryParseFloat(Value, out _)
+            ? "Enter a finite number using a dot as the decimal separator."
+            : string.Empty;
+    }
+}
+
+public sealed class PlanetAppearanceFieldViewModel : ObservableObject
+{
+    public PlanetAppearanceFieldViewModel(
+        PlanetAppearance appearance,
+        PlanetAppearancePropertyDefinition definition,
+        Action changed)
+    {
+        Definition = definition;
+        var numeric = definition.Editor is PlanetAppearanceEditorKind.Scalar or
+            PlanetAppearanceEditorKind.ColorVector or PlanetAppearanceEditorKind.MixerVector;
+        void FieldChanged()
+        {
+            OnPropertyChanged(nameof(ColorBrush));
+            OnPropertyChanged(nameof(ColorSummary));
+            changed();
+        }
+
+        Components = definition.Columns.Select((column, index) => new PlanetAppearanceComponentViewModel(
+            appearance,
+            column,
+            definition.Columns.Count == 1
+                ? definition.DisplayName
+                : definition.ComponentLabels?.ElementAtOrDefault(index) ?? "RGBA"[index].ToString(),
+            numeric,
+            definition.Editor == PlanetAppearanceEditorKind.Texture,
+            FieldChanged)).ToArray();
+        VisibleComponents = Editor == PlanetAppearanceEditorKind.MixerVector
+            ? Components.Take(definition.ComponentLabels?.Count ?? 3).ToArray()
+            : Components;
+        TextureOptions = new ObservableCollection<string>((definition.TextureOptions ?? [])
+            .Append(Primary.Value)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    public PlanetAppearancePropertyDefinition Definition { get; }
+    public string DisplayName => Definition.DisplayName;
+    public string Description => Definition.Description;
+    public PlanetAppearanceEditorKind Editor => Definition.Editor;
+    public IReadOnlyList<PlanetAppearanceComponentViewModel> Components { get; }
+    public IReadOnlyList<PlanetAppearanceComponentViewModel> VisibleComponents { get; }
+    public ObservableCollection<string> TextureOptions { get; }
+    public PlanetAppearanceComponentViewModel Primary => Components[0];
+    public double Minimum => Definition.Minimum ?? 0;
+    public double Maximum => Definition.Maximum ?? 1;
+    public double Step => Definition.Step ?? 0.01;
+    public bool IsScalar => Editor == PlanetAppearanceEditorKind.Scalar;
+    public bool IsShader => Editor == PlanetAppearanceEditorKind.Shader;
+    public bool IsTexture => Editor == PlanetAppearanceEditorKind.Texture;
+    public bool IsPackedColor => Editor == PlanetAppearanceEditorKind.PackedColor;
+    public bool IsColorVector => Editor == PlanetAppearanceEditorKind.ColorVector;
+    public bool IsMixer => Editor == PlanetAppearanceEditorKind.MixerVector;
+    public bool HasError => Components.Any(component => component.HasError);
+    public Brush ColorBrush => new SolidColorBrush(GetDisplayColor());
+    public string ColorSummary
+    {
+        get
+        {
+            var color = GetColorValues();
+            var display = GetDisplayColor();
+            var intensity = Math.Max(color[0], Math.Max(color[1], color[2]));
+            return IsPackedColor
+                ? $"#{display.A:X2}{display.R:X2}{display.G:X2}{display.B:X2}"
+                : $"#{display.R:X2}{display.G:X2}{display.B:X2}  x{intensity:0.###}";
+        }
+    }
+
+    public void Refresh()
+    {
+        if (IsTexture && !string.IsNullOrWhiteSpace(Primary.Value) &&
+            !TextureOptions.Contains(Primary.Value, StringComparer.OrdinalIgnoreCase))
+        {
+            TextureOptions.Add(Primary.Value);
+        }
+
+        foreach (var component in Components)
+        {
+            component.Refresh();
+        }
+        OnPropertyChanged(nameof(ColorBrush));
+        OnPropertyChanged(nameof(ColorSummary));
+    }
+
+    private double[] GetColorValues()
+    {
+        if (IsPackedColor)
+        {
+            var packed = long.TryParse(Primary.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var signed)
+                ? unchecked((uint)signed)
+                : uint.MaxValue;
+            return
+            [
+                ((packed >> 16) & 0xff) / 255d,
+                ((packed >> 8) & 0xff) / 255d,
+                (packed & 0xff) / 255d,
+                ((packed >> 24) & 0xff) / 255d
+            ];
+        }
+
+        return Components.Select(component =>
+                PlanetAppearanceCodec.TryParseFloat(component.Value, out var value) ? (double)value : 0)
+            .ToArray();
+    }
+
+    private Color GetDisplayColor()
+    {
+        var values = GetColorValues();
+        var maximum = Math.Max(values[0], Math.Max(values[1], values[2]));
+        var divisor = IsPackedColor || maximum <= 1 ? 1 : maximum;
+        return Color.FromArgb(
+            255,
+            (byte)Math.Round(Math.Clamp(values[0] / divisor, 0, 1) * 255),
+            (byte)Math.Round(Math.Clamp(values[1] / divisor, 0, 1) * 255),
+            (byte)Math.Round(Math.Clamp(values[2] / divisor, 0, 1) * 255));
+    }
+}
+
+public sealed record PlanetAppearanceGroupViewModel(
+    string Name,
+    string Description,
+    bool ExpandedByDefault,
+    IReadOnlyList<PlanetAppearanceFieldViewModel> Fields);
+
+public enum PlanetDesignerNavigationChoice
+{
+    Apply,
+    Discard,
+    Cancel
+}
+
+public sealed class PlanetDesignerViewModel : ObservableObject
+{
+    private static PlanetAppearance? s_appearanceClipboard;
+    private static string s_appearanceClipboardSource = string.Empty;
+    private readonly Func<GalaxyMapWorkspace?> _workspace;
+    private PlanetDesignerSession _session;
+    private readonly Func<PlanetDesignerSession, WorkflowResult> _apply;
+    private readonly Func<GalaxyMapRowKey, bool> _undo;
+    private readonly Func<GalaxyMapRowKey, bool> _redo;
+    private readonly Func<bool> _canUndo;
+    private readonly Func<bool> _canRedo;
+    private readonly Func<GalaxyMapRowKey, string?, Planet?> _resolvePlanet;
+    private readonly PlanetAppearanceTemplateStore _templates;
+    private IReadOnlyList<PlanetAppearancePreset> _allPresets;
+    private string _presetSearch = string.Empty;
+    private string _statusMessage = string.Empty;
+    private string _errorMessage = string.Empty;
+    private ImageSource? _previewImage;
+    private string _previewDetail = "Preparing preview…";
+    private bool _showLighting = true;
+    private bool _showPostProcessing = true;
+    private bool _showCorona = true;
+    private bool _showStars = true;
+    private bool _performanceMode = true;
+    private double _cloudSpeed = 1;
+
+    public PlanetDesignerViewModel(
+        Func<GalaxyMapWorkspace?> workspace,
+        PlanetDesignerSession session,
+        Func<PlanetDesignerSession, WorkflowResult> apply,
+        Func<GalaxyMapRowKey, bool> undo,
+        Func<GalaxyMapRowKey, bool> redo,
+        Func<bool> canUndo,
+        Func<bool> canRedo,
+        Func<GalaxyMapRowKey, string?, Planet?> resolvePlanet,
+        PlanetAppearanceTemplateStore? templates = null)
+    {
+        _workspace = workspace;
+        _session = session;
+        _apply = apply;
+        _undo = undo;
+        _redo = redo;
+        _canUndo = canUndo;
+        _canRedo = canRedo;
+        _resolvePlanet = resolvePlanet;
+        _templates = templates ?? new PlanetAppearanceTemplateStore();
+        _allPresets = workspace() is { } currentWorkspace
+            ? PlanetAppearancePresetCatalog.Build(currentWorkspace)
+            : [];
+
+        Groups = CreateGroups(session.Draft);
+        ApplyCommand = new RelayCommand(Apply, CanApply);
+        UndoCommand = new RelayCommand(Undo, () => !IsDirty && _canUndo());
+        RedoCommand = new RelayCommand(Redo, () => !IsDirty && _canRedo());
+        UseTemplateCommand = new RelayCommand<PlanetAppearanceTemplate>(UseTemplate, template => template is not null);
+        DeleteTemplateCommand = new RelayCommand<PlanetAppearanceTemplate>(DeleteTemplate, template => template is not null);
+        DismissErrorCommand = new RelayCommand(
+            () => ErrorMessage = string.Empty,
+            () => HasError);
+        RefreshPresets();
+        RefreshTemplates();
+        Validate();
+    }
+
+    public event EventHandler? PreviewRequested;
+    public string Title => $"Planet Designer — {_session.DisplayName}";
+    public string PlanetName => _session.DisplayName;
+    public GalaxyMapRowKey PlanetKey => _session.Key;
+    public string ModuleTag => _session.ModuleTag;
+    public IReadOnlyList<PlanetAppearanceGroupViewModel> Groups { get; private set; }
+    public ObservableCollection<PlanetPresetModuleGroup> PresetModules { get; } = [];
+    public ObservableCollection<PlanetAppearanceTemplate> PersonalTemplates { get; } = [];
+    public RelayCommand ApplyCommand { get; }
+    public RelayCommand UndoCommand { get; }
+    public RelayCommand RedoCommand { get; }
+    public RelayCommand<PlanetAppearanceTemplate> UseTemplateCommand { get; }
+    public RelayCommand<PlanetAppearanceTemplate> DeleteTemplateCommand { get; }
+    public RelayCommand DismissErrorCommand { get; }
+    public bool IsDirty => _session.HasChanges;
+    public bool IsNewPlanet => _session.IsNewPlanet;
+    public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
+    public bool HasErrors => Groups.SelectMany(group => group.Fields).Any(item => item.HasError) || ErrorMessage.Length > 0;
+
+    public string PresetSearch
+    {
+        get => _presetSearch;
+        set
+        {
+            if (SetProperty(ref _presetSearch, value ?? string.Empty))
+            {
+                RefreshPresets();
+            }
+        }
+    }
+
+    public string StatusMessage
+    {
+        get => _statusMessage;
+        private set => SetProperty(ref _statusMessage, value);
+    }
+
+    public string ErrorMessage
+    {
+        get => _errorMessage;
+        private set
+        {
+            if (SetProperty(ref _errorMessage, value))
+            {
+                OnPropertyChanged(nameof(HasError));
+                OnPropertyChanged(nameof(HasErrors));
+                DismissErrorCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public ImageSource? PreviewImage
+    {
+        get => _previewImage;
+        private set => SetProperty(ref _previewImage, value);
+    }
+
+    public string PreviewDetail
+    {
+        get => _previewDetail;
+        private set => SetProperty(ref _previewDetail, value);
+    }
+
+    public bool ShowLighting
+    {
+        get => _showLighting;
+        set { if (SetProperty(ref _showLighting, value)) RequestPreview(); }
+    }
+
+    public bool ShowPostProcessing
+    {
+        get => _showPostProcessing;
+        set { if (SetProperty(ref _showPostProcessing, value)) RequestPreview(); }
+    }
+
+    public bool ShowCorona
+    {
+        get => _showCorona;
+        set { if (SetProperty(ref _showCorona, value)) RequestPreview(); }
+    }
+
+    public bool ShowStars
+    {
+        get => _showStars;
+        set { if (SetProperty(ref _showStars, value)) RequestPreview(); }
+    }
+
+    public bool PerformanceMode
+    {
+        get => _performanceMode;
+        set { if (SetProperty(ref _performanceMode, value)) RequestPreview(); }
+    }
+
+    public double CloudSpeed
+    {
+        get => _cloudSpeed;
+        set => SetProperty(ref _cloudSpeed, value);
+    }
+
+    public Rendering.PlanetRenderMaterial CreateRenderMaterial() =>
+        PlanetAppearanceCodec.ToRenderMaterial(_session.Draft);
+
+    public Rendering.PlanetPreviewOptions CreatePreviewOptions() => new(
+        Lit: ShowLighting,
+        PointLights: ShowLighting,
+        PostProcessed: ShowPostProcessing,
+        Corona: ShowCorona,
+        Stars: ShowStars);
+
+    public bool TryNavigateToPlanet(
+        GalaxyMapRowKey key,
+        string? moduleTag,
+        PlanetDesignerNavigationChoice choice)
+    {
+        if (key == _session.Key &&
+            (moduleTag is null || string.Equals(moduleTag, _session.ModuleTag, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        if (IsDirty || IsNewPlanet)
+        {
+            switch (choice)
+            {
+                case PlanetDesignerNavigationChoice.Apply when !ApplyCore():
+                    return false;
+                case PlanetDesignerNavigationChoice.Cancel:
+                    return false;
+            }
+        }
+
+        if (_resolvePlanet(key, moduleTag) is not { } planet || !PlanetAppearanceCodec.IsAppearanceCapable(planet))
+        {
+            ErrorMessage = "The selected Planet row is no longer available to the designer.";
+            return false;
+        }
+
+        _session = new PlanetDesignerSession(planet);
+        Groups = CreateGroups(_session.Draft);
+        OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(PlanetName));
+        OnPropertyChanged(nameof(PlanetKey));
+        OnPropertyChanged(nameof(ModuleTag));
+        OnPropertyChanged(nameof(Groups));
+        StatusMessage = $"Editing {planet.DisplayName}.";
+        Validate();
+        RaiseState();
+        RequestPreview();
+        return true;
+    }
+
+    public void CopyAppearance(PlanetAppearancePreset preset)
+    {
+        ArgumentNullException.ThrowIfNull(preset);
+        s_appearanceClipboard = preset.Appearance.Clone();
+        s_appearanceClipboardSource = $"{preset.PlanetName} [{preset.ModuleTag}]";
+        StatusMessage = $"Copied the appearance from {s_appearanceClipboardSource}.";
+        ErrorMessage = string.Empty;
+    }
+
+    public bool PasteAppearance()
+    {
+        if (s_appearanceClipboard is null)
+        {
+            StatusMessage = "Copy a Planet appearance from the tree first.";
+            return false;
+        }
+
+        _session.Draft.CopyVisualsFrom(s_appearanceClipboard);
+        RefreshFields();
+        StatusMessage = $"Pasted the appearance from {s_appearanceClipboardSource}. Shader name was kept.";
+        AppearanceChanged();
+        return true;
+    }
+
+    public void UseTemplate(PlanetAppearanceTemplate? template)
+    {
+        if (template is null)
+        {
+            return;
+        }
+
+        _session.Draft.CopyVisualsFrom(template.ToAppearance());
+        RefreshFields();
+        StatusMessage = $"Applied personal template '{template.Name}'. Shader name was kept.";
+        AppearanceChanged();
+    }
+
+    public bool SaveTemplate(string name, string? description)
+    {
+        try
+        {
+            _templates.SaveNew(name, description, _session.Draft);
+            RefreshTemplates();
+            StatusMessage = $"Saved personal template '{name.Trim()}'.";
+            ErrorMessage = string.Empty;
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        {
+            ErrorMessage = exception.Message;
+            return false;
+        }
+    }
+
+    public bool TryApply() => ApplyCore();
+
+    public void SetPreview(ImageSource image, TimeSpan renderTime, IReadOnlyList<string> missingTextures)
+    {
+        PreviewImage = image;
+        var resolution = image is System.Windows.Media.Imaging.BitmapSource bitmap
+            ? $"{bitmap.PixelWidth}x{bitmap.PixelHeight} · "
+            : string.Empty;
+        PreviewDetail = missingTextures.Count == 0
+            ? $"{resolution}rendered in {renderTime.TotalMilliseconds:0.0} ms"
+            : $"{resolution}rendered in {renderTime.TotalMilliseconds:0.0} ms · fallback textures: {string.Join(", ", missingTextures)}";
+    }
+
+    public void SetPreviewError(string message)
+    {
+        PreviewDetail = "Preview unavailable";
+        StatusMessage = message;
+    }
+
+    public void RequestPreview() => PreviewRequested?.Invoke(this, EventArgs.Empty);
+
+    private bool CanApply() => (IsDirty || IsNewPlanet) && !Groups.SelectMany(group => group.Fields).Any(field => field.HasError);
+
+    private void Apply() => ApplyCore();
+
+    private bool ApplyCore()
+    {
+        Validate();
+        if (HasErrors)
+        {
+            return false;
+        }
+
+        var result = _apply(_session);
+        if (!result.Succeeded)
+        {
+            if (result.Error is null)
+            {
+                StatusMessage = result.Message;
+                ErrorMessage = string.Empty;
+            }
+            else
+            {
+                ErrorMessage = result.Error;
+            }
+            return false;
+        }
+
+        StatusMessage = result.Message;
+        ErrorMessage = string.Empty;
+        OnPropertyChanged(nameof(ModuleTag));
+        RefreshFields();
+        RefreshPresetCatalog();
+        RaiseState();
+        return true;
+    }
+
+    private void Undo()
+    {
+        if (_undo(_session.Key)) ReloadFromWorkspace("Undid the last staged editor change.");
+    }
+
+    private void Redo()
+    {
+        if (_redo(_session.Key)) ReloadFromWorkspace("Redid the staged editor change.");
+    }
+
+    private void ReloadFromWorkspace(string status)
+    {
+        if (_resolvePlanet(_session.Key, null) is not { } planet)
+        {
+            ErrorMessage = "The Planet row is no longer present after restoring history.";
+            return;
+        }
+
+        _session.Reload(planet);
+        OnPropertyChanged(nameof(ModuleTag));
+        RefreshFields();
+        RefreshPresetCatalog();
+        StatusMessage = status;
+        Validate();
+        RequestPreview();
+    }
+
+    private void DeleteTemplate(PlanetAppearanceTemplate? template)
+    {
+        if (template is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _templates.Delete(template);
+            RefreshTemplates();
+            StatusMessage = $"Deleted personal template '{template.Name}'.";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            ErrorMessage = exception.Message;
+        }
+    }
+
+    private void AppearanceChanged()
+    {
+        Validate();
+        RaiseState();
+        RequestPreview();
+    }
+
+    private void Validate()
+    {
+        var numericError = Groups.SelectMany(group => group.Fields).Any(field => field.HasError);
+        if (numericError)
+        {
+            ErrorMessage = "Correct the highlighted numeric material value before applying.";
+        }
+        else if (IsDirty || IsNewPlanet)
+        {
+            if (_workspace() is { } currentWorkspace)
+            {
+                var sourceLayer = currentWorkspace.Layers.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Module.Tag, _session.ModuleTag, StringComparison.OrdinalIgnoreCase));
+                if (sourceLayer is not { Module.IsReadOnly: false, Module.IsBaseGame: false })
+                {
+                    ErrorMessage = currentWorkspace.Modules.Any(module => !module.IsReadOnly && !module.IsBaseGame)
+                        ? string.Empty
+                        : "Select a writable module before applying this Planet appearance.";
+                    return;
+                }
+
+                var shader = PlanetShaderNameValidator.Validate(
+                    currentWorkspace,
+                    _session.Key,
+                    _session.Draft,
+                    sourceLayer.Module.Tag);
+                ErrorMessage = shader.IsValid ? string.Empty : shader.Message;
+            }
+            else
+            {
+                ErrorMessage = "The galaxy-map workspace is no longer available.";
+            }
+        }
+        else
+        {
+            ErrorMessage = string.Empty;
+        }
+    }
+
+    private void RefreshFields()
+    {
+        foreach (var field in Groups.SelectMany(group => group.Fields))
+        {
+            field.Refresh();
+        }
+    }
+
+    private IReadOnlyList<PlanetAppearanceGroupViewModel> CreateGroups(PlanetAppearance appearance) =>
+        PlanetAppearanceSchema.Groups
+            .Select(group => new PlanetAppearanceGroupViewModel(
+                group.Name,
+                group.Description,
+                group.ExpandedByDefault,
+                PlanetAppearanceSchema.Properties
+                    .Where(property => property.Group == group.Name)
+                    .Select(definition => new PlanetAppearanceFieldViewModel(
+                        appearance,
+                        definition,
+                        AppearanceChanged)).ToArray()))
+            .ToArray();
+
+    private void RefreshPresetCatalog()
+    {
+        _allPresets = _workspace() is { } currentWorkspace
+            ? PlanetAppearancePresetCatalog.Build(currentWorkspace)
+            : [];
+        RefreshPresets();
+    }
+
+    private void RefreshPresets()
+    {
+        PresetModules.Clear();
+        foreach (var module in PlanetAppearancePresetCatalog.Group(_allPresets, PresetSearch))
+        {
+            PresetModules.Add(module);
+        }
+    }
+
+    private void RefreshTemplates()
+    {
+        PersonalTemplates.Clear();
+        foreach (var template in _templates.LoadAll())
+        {
+            PersonalTemplates.Add(template);
+        }
+
+        if (_templates.Warnings.Count > 0)
+        {
+            StatusMessage = _templates.Warnings.Count == 1
+                ? _templates.Warnings[0]
+                : $"Skipped {_templates.Warnings.Count} unavailable or invalid personal Planet templates.";
+        }
+    }
+
+    private void RaiseState()
+    {
+        OnPropertyChanged(nameof(IsDirty));
+        OnPropertyChanged(nameof(IsNewPlanet));
+        OnPropertyChanged(nameof(HasErrors));
+        ApplyCommand.RaiseCanExecuteChanged();
+        UndoCommand.RaiseCanExecuteChanged();
+        RedoCommand.RaiseCanExecuteChanged();
+    }
+}

@@ -19,11 +19,6 @@ public sealed record HistoryRestoreResult(
     ChangeImpact? Impact = null,
     string? Error = null);
 
-public sealed record EditScopeRequest(
-    Func<IReadOnlyList<FieldChange>, WorkflowResult> Preview,
-    Func<WorkflowResult> Commit,
-    Action Cancel);
-
 public sealed record SessionMutationRequest(
     Action Mutation,
     Action Rollback,
@@ -56,9 +51,6 @@ public sealed class EditSessionService
 
     public void MarkTableDirty(GalaxyMapModule module, GalaxyMapTable table)
         => _session.Changes.MarkTable(module.Tag, table);
-
-    public void MarkTablesDirty(GalaxyMapModule module, IEnumerable<GalaxyMapTable> tables)
-        => _session.Changes.MarkTables(module.Tag, tables);
 
     public void MarkMetadataDirty(GalaxyMapModule module)
         => _session.Changes.MarkMetadata(module.Tag);
@@ -125,6 +117,7 @@ public sealed class EditSessionService
         {
             GalaxyMapRowAuthoring.EnsureSnapshot(row).MarkDirty(column);
             _session.Changes.MarkTable(module.Tag, row.Table);
+            _session.Workspace?.Recompose();
             var impact = ChangeImpact.For([row.Table], [row.Key], isStructural: false);
             _session.Publish(impact);
             CompleteUserEdit();
@@ -247,7 +240,7 @@ public sealed class EditSessionService
         }
     }
 
-    public WorkflowResult Commit()
+    public WorkflowResult Commit(Action? persistWorkspace = null)
     {
         var workspace = _session.Workspace;
         if (workspace is null || !_session.Changes.HasChanges)
@@ -255,7 +248,16 @@ public sealed class EditSessionService
             return WorkflowResult.Success(string.Empty);
         }
 
+        if (ValidateChangedPlanetShaders(workspace) is { } shaderError)
+        {
+            return WorkflowResult.Failure(shaderError);
+        }
+
         var failedModules = new List<string>();
+        var committedProgress = false;
+        var committedTables = new HashSet<GalaxyMapTable>();
+        var committedRows = new HashSet<GalaxyMapRowKey>();
+        var completedModuleTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var tag in _session.Changes.ModuleTags().ToArray())
         {
             var layer = workspace.ModuleLayers.FirstOrDefault(candidate =>
@@ -274,21 +276,49 @@ public sealed class EditSessionService
                     var targetPath = GalaxyMapTextureService.ResolveModuleTexturePath(layer.Module, pending.RelativePath)
                         ?? throw new InvalidOperationException($"Invalid module file path '{pending.RelativePath}'.");
                     AtomicFileWriter.Write(targetPath, pending.Contents);
+                    committedProgress = true;
                 }
 
                 var tables = _session.Changes.TablesFor(tag);
                 if (tables.Count > 0)
                 {
-                    _writer.WriteTables(layer, tables);
+                    var dirtyRows = tables.ToDictionary(
+                        table => table,
+                        table => layer.Rows(table)
+                            .Where(row => row.CsvSnapshot?.DirtyColumns.Count > 0)
+                            .Select(row => row.Key)
+                            .ToArray());
+                    _writer.WriteTables(layer, tables, table =>
+                    {
+                        committedProgress = true;
+                        committedTables.Add(table);
+                        committedRows.UnionWith(dirtyRows[table]);
+                    });
                 }
 
-                if (!layer.Module.IsReadOnly &&
-                    (_session.Changes.IsMetadataDirty(tag) || files.Count > 0))
+                var metadataDirty = _session.Changes.IsMetadataDirty(tag);
+                var hasOwnedManifest = layer.Module.FolderPath is { } folderPath &&
+                                       File.Exists(Path.Combine(folderPath, GalaxyMapModuleManifestStore.FileName));
+                if ((metadataDirty || files.Count > 0) &&
+                    (!layer.Module.IsReadOnly || hasOwnedManifest))
                 {
                     _manifestStore.Save(layer.Module);
+                    committedProgress = true;
+                }
+                else if (metadataDirty && layer.Module.IsReadOnly)
+                {
+                    // Legacy read-only mounts intentionally have no module.json. Their
+                    // editable presentation metadata is authoritative in workspace.json,
+                    // so the caller must supply that durable boundary before its staged
+                    // flag can clear.
+                    if (persistWorkspace is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Read-only module {layer.Module.Tag} has no manifest; workspace persistence is required to commit its metadata.");
+                    }
                 }
 
-                _session.Changes.ClearModule(tag);
+                completedModuleTags.Add(tag);
             }
             catch (Exception exception) when (IsExpectedOperationFailure(exception))
             {
@@ -296,10 +326,56 @@ public sealed class EditSessionService
             }
         }
 
+        var workspacePersistenceFailed = false;
+        if (completedModuleTags.Count > 0 && persistWorkspace is not null)
+        {
+            try
+            {
+                // Workspace persistence is part of the commit boundary, not a second
+                // best-effort UI step. Keep every completed tag retryable until this
+                // single atomic save has succeeded.
+                persistWorkspace();
+                committedProgress = true;
+            }
+            catch (Exception exception) when (IsExpectedOperationFailure(exception))
+            {
+                workspacePersistenceFailed = true;
+                failedModules.Add($"workspace: {exception.Message}");
+            }
+        }
+
+        if (!workspacePersistenceFailed)
+        {
+            foreach (var tag in completedModuleTags)
+            {
+                _session.Changes.ClearModule(tag);
+            }
+        }
+
         if (failedModules.Count > 0)
         {
-            return WorkflowResult.Failure(
-                "Some changes could not be committed: " + string.Join(" | ", failedModules));
+            var error = committedProgress
+                ? "Some changes were committed, but others could not be committed: " +
+                  string.Join(" | ", failedModules) +
+                  ". Remaining staged changes can be retried."
+                : "Some changes could not be committed: " + string.Join(" | ", failedModules);
+            if (!committedProgress)
+            {
+                return WorkflowResult.Failure(error);
+            }
+
+            // A successful atomic replacement cannot be undone in memory. Recompose so
+            // newly-clean CSV snapshots and any completed modules are reflected by the
+            // effective document, then establish a history boundary before publishing.
+            workspace.Recompose();
+            ClearHistory();
+            var impact = ChangeImpact.For(committedTables, committedRows, isStructural: false);
+            _session.Publish(impact);
+            return new WorkflowResult(
+                Succeeded: false,
+                Message: error,
+                Impact: impact,
+                Error: error);
         }
 
         workspace.Recompose();
@@ -308,11 +384,43 @@ public sealed class EditSessionService
         return WorkflowResult.Success("Committed all staged module changes to CSV.", impact: ChangeImpact.StructuralAll);
     }
 
-    public void DiscardChangeState()
+    private string? ValidateChangedPlanetShaders(GalaxyMapWorkspace workspace)
     {
-        _session.Changes.Clear();
-        ClearHistory();
-        _session.Publish(ChangeImpact.StructuralAll);
+        foreach (var tag in _session.Changes.ModuleTags())
+        {
+            if (!_session.Changes.TablesFor(tag).Contains(GalaxyMapTable.Planet))
+            {
+                continue;
+            }
+
+            var layer = workspace.ModuleLayers.FirstOrDefault(candidate =>
+                string.Equals(candidate.Module.Tag, tag, StringComparison.OrdinalIgnoreCase));
+            if (layer is null)
+            {
+                continue;
+            }
+
+            foreach (var planet in layer.Planets.Where(PlanetAppearanceCodec.IsAppearanceCapable))
+            {
+                var snapshot = planet.CsvSnapshot;
+                if (snapshot is null || !PlanetAppearanceSchema.Columns.Any(snapshot.IsDirty))
+                {
+                    continue;
+                }
+
+                var result = PlanetShaderNameValidator.Validate(
+                    workspace,
+                    planet.Key,
+                    PlanetAppearanceCodec.Decode(planet),
+                    tag);
+                if (!result.IsValid)
+                {
+                    return $"Planet row {planet.RowId} in {tag} cannot be committed: {result.Message}";
+                }
+            }
+        }
+
+        return null;
     }
 
     public HistoryRestoreResult Undo(HistoryPresentationState currentPresentation)
@@ -343,12 +451,6 @@ public sealed class EditSessionService
         _editSnapshotCaptured = false;
         _historyBeforeUserEdit = null;
         _changesBeforeUserEdit = null;
-    }
-
-    public IEditScope BeginEditScope(EditScopeRequest request, HistoryPresentationState presentation)
-    {
-        BeginUserEdit(presentation);
-        return new CoalescedEditScope(this, request);
     }
 
     private EditorHistoryState CaptureState(HistoryPresentationState presentation)
@@ -422,44 +524,4 @@ public sealed class EditSessionService
         => exception is GalaxyMapLoadException or IOException or UnauthorizedAccessException or
             InvalidOperationException or ArgumentException or OverflowException;
 
-    private sealed class CoalescedEditScope(EditSessionService owner, EditScopeRequest request) : IEditScope
-    {
-        private bool _completed;
-
-        public WorkflowResult Preview(IReadOnlyList<FieldChange> changes)
-            => _completed
-                ? WorkflowResult.Failure("The edit scope is already complete.")
-                : request.Preview(changes);
-
-        public WorkflowResult Commit()
-        {
-            if (_completed)
-            {
-                return WorkflowResult.Failure("The edit scope is already complete.");
-            }
-
-            var result = request.Commit();
-            if (result.Succeeded)
-            {
-                _completed = true;
-                owner.CompleteUserEdit();
-            }
-
-            return result;
-        }
-
-        public void Cancel()
-        {
-            if (_completed)
-            {
-                return;
-            }
-
-            request.Cancel();
-            _completed = true;
-            owner.CompleteUserEdit();
-        }
-
-        public void Dispose() => Cancel();
-    }
 }

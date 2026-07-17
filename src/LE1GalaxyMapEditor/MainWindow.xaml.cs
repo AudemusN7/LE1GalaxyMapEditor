@@ -2,8 +2,10 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using LE1GalaxyMapEditor.Controls;
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.ViewModels;
@@ -14,6 +16,8 @@ namespace LE1GalaxyMapEditor;
 
 public partial class MainWindow : Window
 {
+    private PlanetDesignerWindow? _planetDesigner;
+    private MainViewModel? _subscribedViewModel;
     private HierarchyNodeViewModel? _coordinateDragNode;
     private bool _endingCoordinateDrag;
     private Point _coordinateDragStart;
@@ -24,6 +28,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DarkTitleBar.Apply(this);
+        DataContextChanged += MainWindow_OnDataContextChanged;
         MapSquare.PreviewMouseMove += OnMapSquarePreviewMouseMove;
         MapSquare.PreviewMouseLeftButtonDown += OnMapSquarePreviewMouseLeftButtonDown;
         MapSquare.PreviewMouseLeftButtonUp += OnMapSquarePreviewMouseLeftButtonUp;
@@ -65,7 +70,7 @@ public partial class MainWindow : Window
         }
         else if (dialog.Choice == ConfirmationChoice.Secondary)
         {
-            viewModel.DiscardPendingChanges();
+            viewModel.AbandonPendingChangesForShutdown();
         }
     }
 
@@ -216,8 +221,83 @@ public partial class MainWindow : Window
 
     private void MainWindow_OnClosed(object? sender, EventArgs eventArgs)
     {
+        var viewModel = _subscribedViewModel ?? DataContext as MainViewModel;
+        SubscribeToViewModel(null);
         MapSquare.ForceCursor = false;
         MapSquare.ClearValue(CursorProperty);
+        viewModel?.Dispose();
+    }
+
+    private void MainWindow_OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs eventArgs)
+        => SubscribeToViewModel(eventArgs.NewValue as MainViewModel);
+
+    private void SubscribeToViewModel(MainViewModel? viewModel)
+    {
+        if (_subscribedViewModel is not null)
+        {
+            _subscribedViewModel.PlanetDesignerRequested -= ViewModel_OnPlanetDesignerRequested;
+            _subscribedViewModel.TableViewer.PropertyChanged -= TableViewer_OnPropertyChanged;
+        }
+
+        _subscribedViewModel = viewModel;
+        if (_subscribedViewModel is not null)
+        {
+            _subscribedViewModel.PlanetDesignerRequested += ViewModel_OnPlanetDesignerRequested;
+            _subscribedViewModel.TableViewer.PropertyChanged += TableViewer_OnPropertyChanged;
+        }
+
+        ConfigureTableColumns();
+    }
+
+    private void TableViewer_OnPropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (eventArgs.PropertyName == nameof(TableViewerViewModel.Columns))
+        {
+            ConfigureTableColumns();
+        }
+    }
+
+    private void ViewModel_OnPlanetDesignerRequested(object? sender, PlanetDesignerRequestedEventArgs eventArgs)
+    {
+        if (_planetDesigner is { } existing)
+        {
+            existing.NavigateToPlanet(eventArgs.PlanetKey, eventArgs.ModuleTag);
+            if (existing.WindowState == WindowState.Minimized)
+            {
+                existing.WindowState = WindowState.Normal;
+            }
+            existing.Activate();
+            return;
+        }
+
+        if (_subscribedViewModel is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var window = new PlanetDesignerWindow(_subscribedViewModel.CreatePlanetDesigner(
+                eventArgs.PlanetKey,
+                eventArgs.ModuleTag))
+            {
+                Owner = this
+            };
+            _planetDesigner = window;
+            window.Closed += (_, _) =>
+            {
+                if (ReferenceEquals(_planetDesigner, window))
+                {
+                    _planetDesigner = null;
+                }
+            };
+            window.PrepareForFirstShow();
+            window.Show();
+        }
+        catch (InvalidOperationException exception)
+        {
+            MessageBox.Show(this, exception.Message, "Planet Designer", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
     }
 
     private void UpdateShiftDragMode(bool enabled)
@@ -313,6 +393,134 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() == true && dialog.Result is { } value) field.Value = value;
     }
 
+    private void TableGrid_OnLoaded(object sender, RoutedEventArgs eventArgs)
+        => ConfigureTableColumns();
+
+    private void ConfigureTableColumns()
+    {
+        if (DataContext is not MainViewModel viewModel || TableGrid is null)
+        {
+            return;
+        }
+
+        var textStyle = (Style)FindResource("TwoDaCellTextStyle");
+        var editorStyle = (Style)FindResource("TwoDaCellEditorStyle");
+        var baseCellStyle = (Style)FindResource("TwoDaCellBaseStyle");
+        var moduleColorConverter = (IValueConverter)FindResource("ModuleColorBrushConverter");
+        TableGrid.Columns.Clear();
+        for (var index = 0; index < viewModel.TableViewer.Columns.Count; index++)
+        {
+            var column = viewModel.TableViewer.Columns[index];
+            var cellStyle = new Style(typeof(DataGridCell), baseCellStyle);
+            cellStyle.Setters.Add(new Setter(
+                DataGridCell.BorderBrushProperty,
+                new Binding($"Cells[{index}].EffectiveModuleColor") { Converter = moduleColorConverter }));
+            cellStyle.Setters.Add(new Setter(
+                ToolTipProperty,
+                new Binding($"Cells[{index}].ToolTipText")));
+
+            var stagedTrigger = new DataTrigger
+            {
+                Binding = new Binding($"Cells[{index}].IsStaged"),
+                Value = true
+            };
+            stagedTrigger.Setters.Add(new Setter(DataGridCell.BackgroundProperty, FindResource("AccentDimBrush")));
+            stagedTrigger.Setters.Add(new Setter(DataGridCell.BorderThicknessProperty, new Thickness(1.5)));
+            cellStyle.Triggers.Add(stagedTrigger);
+
+            var errorTrigger = new DataTrigger
+            {
+                Binding = new Binding($"Cells[{index}].HasError"),
+                Value = true
+            };
+            errorTrigger.Setters.Add(new Setter(DataGridCell.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x35, 0x1A, 0x20))));
+            errorTrigger.Setters.Add(new Setter(DataGridCell.BorderBrushProperty, FindResource("DangerBrush")));
+            errorTrigger.Setters.Add(new Setter(DataGridCell.BorderThicknessProperty, new Thickness(2)));
+            cellStyle.Triggers.Add(errorTrigger);
+
+            // Keep selection visually distinct from the filled staged-edit state. This trigger is
+            // deliberately last so the active-cell outline remains visible on staged/error cells.
+            var selectedTrigger = new Trigger
+            {
+                Property = DataGridCell.IsSelectedProperty,
+                Value = true
+            };
+            selectedTrigger.Setters.Add(new Setter(DataGridCell.BorderBrushProperty, Brushes.White));
+            selectedTrigger.Setters.Add(new Setter(DataGridCell.BorderThicknessProperty, new Thickness(2)));
+            cellStyle.Triggers.Add(selectedTrigger);
+
+            TableGrid.Columns.Add(new DataGridTextColumn
+            {
+                Header = column.Name,
+                // A OneWay DataGridBoundColumn is coerced read-only by WPF. EditValue is only a
+                // presentation buffer; CellEditEnding still routes the mutation through the shared workflow.
+                Binding = new Binding($"Cells[{index}].EditValue") { Mode = BindingMode.TwoWay },
+                CellStyle = cellStyle,
+                ElementStyle = textStyle,
+                EditingElementStyle = editorStyle,
+                IsReadOnly = viewModel.TableViewer.IsColumnReadOnly(column),
+                MinWidth = string.Equals(column.Name, CsvRowSnapshot.RowIdColumnName, StringComparison.OrdinalIgnoreCase)
+                    ? 72
+                    : 86,
+                MaxWidth = 420,
+                Width = ColumnWidth(column.Name)
+            });
+        }
+
+        TableGrid.FrozenColumnCount = TableGrid.Columns.Count == 0 ? 0 : 1;
+    }
+
+    private static DataGridLength ColumnWidth(string columnName)
+        => columnName.ToUpperInvariant() switch
+        {
+            "ROW ID" => new DataGridLength(78),
+            "NAMETEXT" or "BACKGROUND" or "EVENT" or "MAP" or "STARTPOINT" => new DataGridLength(180),
+            "SYSTEMLEVELTYPE" or "PLANETLEVELTYPE" or "VISIBLECONDITIONAL" or "VISIBLEFUNCTION" or
+                "VISIBLEPARAMETER" or "USABLECONDITIONAL" or "USABLEFUNCTION" or "USABLEPARAMETER" =>
+                new DataGridLength(145),
+            _ => new DataGridLength(118)
+        };
+
+    private void TableGrid_OnCellEditEnding(object sender, DataGridCellEditEndingEventArgs eventArgs)
+    {
+        if (eventArgs.EditAction != DataGridEditAction.Commit ||
+            eventArgs.Row.Item is not TableRowViewModel row ||
+            eventArgs.EditingElement is not TextBox editor ||
+            DataContext is not MainViewModel viewModel)
+        {
+            return;
+        }
+
+        var result = viewModel.TableViewer.CommitCellEdit(row, eventArgs.Column.DisplayIndex, editor.Text);
+        if (!result.Succeeded)
+        {
+            eventArgs.Cancel = true;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                editor.Focus();
+                editor.SelectAll();
+            }), DispatcherPriority.Input);
+            return;
+        }
+
+        Dispatcher.BeginInvoke(new Action(() => viewModel.TableViewer.RefreshIfNeeded()),
+            DispatcherPriority.Background);
+    }
+
+    private void TableGrid_OnPreviewMouseWheel(object sender, MouseWheelEventArgs eventArgs)
+    {
+        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ||
+            FindVisualDescendant<ScrollViewer>(TableGrid) is not { } scrollViewer)
+        {
+            return;
+        }
+
+        scrollViewer.ScrollToHorizontalOffset(Math.Max(
+            0,
+            scrollViewer.HorizontalOffset - eventArgs.Delta / 120d * 96d));
+        eventArgs.Handled = true;
+    }
+
     private void DiagnosticsHeader_OnDragDelta(object sender, DragDeltaEventArgs eventArgs)
     {
         DiagnosticsTransform.X += eventArgs.HorizontalChange;
@@ -351,6 +559,18 @@ public partial class MainWindow : Window
         viewModel.ActivateHierarchyNode(node);
     }
 
+    private void HierarchyItem_OnMouseDoubleClick(object sender, MouseButtonEventArgs eventArgs)
+    {
+        if (sender is TreeViewItem { DataContext: HierarchyNodeViewModel node } treeViewItem &&
+            ReferenceEquals(FindNearestTreeViewItem(eventArgs.OriginalSource as DependencyObject), treeViewItem) &&
+            !IsInsideExpanderToggle(eventArgs.OriginalSource as DependencyObject, treeViewItem) &&
+            node.OpenPlanetDesignerCommand.CanExecute(null))
+        {
+            node.OpenPlanetDesignerCommand.Execute(null);
+            eventArgs.Handled = true;
+        }
+    }
+
     private static TreeViewItem? FindNearestTreeViewItem(DependencyObject? source)
     {
         for (var current = source; current is not null; current = GetParent(current))
@@ -375,6 +595,30 @@ public partial class MainWindow : Window
         }
 
         return false;
+    }
+
+    private static T? FindVisualDescendant<T>(DependencyObject? root) where T : DependencyObject
+    {
+        if (root is null)
+        {
+            return null;
+        }
+
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindVisualDescendant<T>(child) is { } descendant)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
     }
 
     private static DependencyObject? GetParent(DependencyObject child)

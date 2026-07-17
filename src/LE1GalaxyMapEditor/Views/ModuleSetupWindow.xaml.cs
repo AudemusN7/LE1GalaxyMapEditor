@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using LE1GalaxyMapEditor.Models;
@@ -127,7 +126,7 @@ public partial class ModuleSetupWindow : Window
     {
         if (!_tagWasEdited && TagBox is not null)
         {
-            TagBox.Text = ToTag(NameBox.Text);
+            TagBox.Text = GalaxyMapModule.SuggestTag(NameBox.Text);
         }
     }
 
@@ -145,7 +144,7 @@ public partial class ModuleSetupWindow : Window
         {
             var name = RequireText(NameBox.Text, "Enter a module display name.");
             var tag = RequireText(TagBox.Text, "Enter a module tag.").ToUpperInvariant();
-            if (!Regex.IsMatch(tag, "^[A-Z0-9_-]+$", RegexOptions.CultureInvariant))
+            if (!GalaxyMapModule.IsValidTag(tag))
             {
                 throw new InvalidOperationException("The tag may contain only letters, numbers, underscores, and hyphens.");
             }
@@ -202,9 +201,4 @@ public partial class ModuleSetupWindow : Window
     private static string RequireText(string value, string message)
         => string.IsNullOrWhiteSpace(value) ? throw new InvalidOperationException(message) : value.Trim();
 
-    private static string ToTag(string value)
-    {
-        var tag = Regex.Replace(value.Trim().ToUpperInvariant(), "[^A-Z0-9_-]+", "_");
-        return tag.Trim('_', '-');
-    }
 }

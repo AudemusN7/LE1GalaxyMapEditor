@@ -8,6 +8,7 @@ public sealed class ObjectScaleConverter : IValueConverter, IMultiValueConverter
     public const double MinimumSourceScale = 0.5d;
     public const double MaximumSourceScale = 8d;
     public const double ReferenceViewportExtent = 760d;
+    public const double MaximumDisplayScale = 3.6d;
 
     public static double Calculate(double sourceScale)
     {
@@ -16,8 +17,17 @@ public sealed class ObjectScaleConverter : IValueConverter, IMultiValueConverter
             MinimumSourceScale,
             MaximumSourceScale);
         var logarithmicScale = Math.Log2(clamped);
-        return 1d + (0.3541666666666667d * logarithmicScale) +
-               (0.10416666666666667d * logarithmicScale * logarithmicScale);
+        var baseline = 1d + (0.3541666666666667d * logarithmicScale) +
+                       (0.10416666666666667d * logarithmicScale * logarithmicScale);
+
+        // Preserve the complete lower half of the curve, then progressively
+        // widen the contrast near the upper boundary. The cubic ramp keeps
+        // scale 2 almost unchanged while taking scale 8 from 3.0 to 3.6.
+        var upperProgress = Math.Clamp(
+            logarithmicScale / Math.Log2(MaximumSourceScale),
+            0d,
+            1d);
+        return baseline + ((MaximumDisplayScale - 3d) * upperProgress * upperProgress * upperProgress);
     }
 
     public static double Calculate(double sourceScale, double viewportExtent)

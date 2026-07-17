@@ -11,6 +11,11 @@ namespace LE1GalaxyMapEditor.Services;
 /// </summary>
 public sealed partial class GalaxyMapValidator
 {
+    private static readonly string[] PackedPlanetAppearanceColumns = PlanetAppearanceSchema.Properties
+        .Where(property => property.Editor == PlanetAppearanceEditorKind.PackedColor)
+        .SelectMany(property => property.Columns)
+        .ToArray();
+
     private static readonly GalaxyMapTable[] ReservableTables =
     [
         GalaxyMapTable.Cluster,
@@ -560,6 +565,25 @@ public sealed partial class GalaxyMapValidator
                 AddForRow(diagnostics, planet, "TYPE-RING-COLOR", ValidationSeverity.Error,
                     "RingColor must fit either a signed or unsigned packed 32-bit colour value.",
                     nameof(Planet.RingColor));
+            }
+
+            foreach (var column in PackedPlanetAppearanceColumns)
+            {
+                if (!planet.ExtraFields.TryGetValue(column, out var token))
+                {
+                    continue;
+                }
+
+                if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var packed) &&
+                    packed is >= int.MinValue and <= uint.MaxValue)
+                {
+                    continue;
+                }
+
+                AddForRow(diagnostics, planet, "TYPE-PLANET-PACKED-COLOR", ValidationSeverity.Warning,
+                    $"{column} should be a signed or unsigned packed 32-bit colour value; " +
+                    $"'{token}' will render as black in the editor preview.",
+                    column);
             }
 
             if (!TryParseLabelSuffix(planet.Label, "Planet", out var planetSuffix))

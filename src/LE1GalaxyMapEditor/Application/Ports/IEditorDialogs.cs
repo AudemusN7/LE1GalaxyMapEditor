@@ -45,6 +45,13 @@ public sealed record PlanetCreationRequest(
     double Scale,
     LandableDestinationRequest? Destination);
 
+public sealed record PlanetShaderNameRequest(
+    string PlanetName,
+    int PlanetRowId,
+    GalaxyMapModule TargetModule,
+    string SuggestedName,
+    Func<string, string?> Validate);
+
 public sealed record CloneContentRequest(
     int RowId,
     string Label,
@@ -72,6 +79,7 @@ public interface IEditorDialogs
         GalaxyMapRow row,
         IReadOnlyList<GalaxyMapModule> candidates,
         GalaxyMapModule? activeModule);
+    string? ChoosePlanetShaderName(PlanetShaderNameRequest request);
     string? PickClusterTexture();
     LandableDestinationRequest? ConfigureLandableDestination(LandableDestinationDefaults defaults);
     MoveDestinationOption? ChooseMoveDestination(

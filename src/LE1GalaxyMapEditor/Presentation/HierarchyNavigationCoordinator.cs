@@ -26,6 +26,7 @@ public sealed class HierarchyNavigationCoordinator : IDisposable
     private readonly Action<GalaxyMapRow> _cloneRow;
     private readonly Action<GalaxyMapRow> _deleteRow;
     private readonly Action<GalaxyMapRow> _moveRow;
+    private readonly Action<Planet> _openPlanetDesigner;
     private readonly Func<GalaxyMapRow, bool> _canMoveRow;
     private readonly Action<HierarchyNodeViewModel> _addChild;
     private readonly PropertyChangedEventHandler _modelChanged;
@@ -50,6 +51,7 @@ public sealed class HierarchyNavigationCoordinator : IDisposable
         Action<GalaxyMapRow> cloneRow,
         Action<GalaxyMapRow> deleteRow,
         Action<GalaxyMapRow> moveRow,
+        Action<Planet> openPlanetDesigner,
         Func<GalaxyMapRow, bool> canMoveRow,
         Action<HierarchyNodeViewModel> addChild,
         PropertyChangedEventHandler modelChanged,
@@ -65,6 +67,7 @@ public sealed class HierarchyNavigationCoordinator : IDisposable
         _cloneRow = cloneRow;
         _deleteRow = deleteRow;
         _moveRow = moveRow;
+        _openPlanetDesigner = openPlanetDesigner;
         _canMoveRow = canMoveRow;
         _addChild = addChild;
         _modelChanged = modelChanged;
@@ -357,6 +360,7 @@ public sealed class HierarchyNavigationCoordinator : IDisposable
             _cloneRow,
             _deleteRow,
             _moveRow,
+            _openPlanetDesigner,
             _canMoveRow(row),
             _addChild,
             _hasActiveModule);

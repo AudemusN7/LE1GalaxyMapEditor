@@ -9,7 +9,8 @@ namespace LE1GalaxyMapEditor.Presentation;
 
 public sealed class WpfEditorDialogs(
     Func<GalaxyMapRow, IReadOnlyList<GalaxyMapModule>, GalaxyMapModule?>? editTargetSelector = null,
-    Func<string, bool>? confirmAction = null) : IEditorDialogs
+    Func<string, bool>? confirmAction = null,
+    Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null) : IEditorDialogs
 {
     public ModuleSetupResult? ConfigureModule(ModuleSetupDialogRequest request)
     {
@@ -80,7 +81,7 @@ public sealed class WpfEditorDialogs(
             return editTargetSelector(row, candidates);
         }
 
-        if (Application.Current?.MainWindow is { IsLoaded: true } owner)
+        if (ActiveOwner() is { IsLoaded: true } owner)
         {
             var dialog = new ModuleTargetWindow(candidates, activeModule) { Owner = owner };
             return dialog.ShowDialog() == true ? dialog.SelectedModule : null;
@@ -89,6 +90,23 @@ public sealed class WpfEditorDialogs(
         return activeModule is not null && candidates.Contains(activeModule)
             ? activeModule
             : candidates.FirstOrDefault();
+    }
+
+    public string? ChoosePlanetShaderName(PlanetShaderNameRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (shaderNameSelector is not null)
+        {
+            return shaderNameSelector(request);
+        }
+
+        if (ActiveOwner() is { IsLoaded: true } owner)
+        {
+            var dialog = new PlanetShaderNameWindow(request) { Owner = owner };
+            return dialog.ShowDialog() == true ? dialog.ShaderName : null;
+        }
+
+        return request.SuggestedName;
     }
 
     public string? PickClusterTexture()
@@ -150,4 +168,8 @@ public sealed class WpfEditorDialogs(
         };
         return dialog.ShowDialog() == true && dialog.Choice == ConfirmationChoice.Primary;
     }
+
+    private static Window? ActiveOwner()
+        => Application.Current?.Windows.OfType<Window>().FirstOrDefault(window => window.IsActive)
+           ?? Application.Current?.MainWindow;
 }

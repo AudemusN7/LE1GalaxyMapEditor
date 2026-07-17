@@ -189,11 +189,11 @@ public sealed partial class GalaxyMapRowFactory
         }
 
         row.CsvSnapshot = snapshot;
-        var effective = (T)_workspace.UpsertActiveRow(row);
+        layer.Upsert(row);
         layer.SetSourceRowOrder(
             row.Table,
             layer.Rows(row.Table).Select(candidate => candidate.RowId).OrderBy(rowId => rowId));
-        return effective;
+        return row;
     }
 
     private GalaxyMapLayer RequireActiveLayer()

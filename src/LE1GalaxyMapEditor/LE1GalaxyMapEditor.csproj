@@ -26,10 +26,17 @@
     <None Update="resources\textures\*.png"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
+    <None Update="resources\planet-designer\**\*"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
 
     <!-- Branding is small and is needed before external resources are checked. -->
     <Resource Include="resources\branding\*.png" />
     <Resource Include="resources\branding\*.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LE1GalaxyMapEditor.Rendering\LE1GalaxyMapEditor.Rendering.csproj" />
   </ItemGroup>
 
 </Project>

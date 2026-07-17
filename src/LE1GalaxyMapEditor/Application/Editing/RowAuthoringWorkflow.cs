@@ -460,7 +460,13 @@ public sealed class RowAuthoringWorkflow(
             return WorkflowResult.Failure("A workspace is required before deleting rows.");
         }
 
-        var layer = WritableOwningLayer(row);
+        // The hierarchy exposes the effective (highest-mounted) row, but row
+        // actions author against the module the user explicitly made active.
+        // Prefer its same-key physical row when one exists; otherwise retain
+        // the existing owning-layer behaviour for unambiguous rows.
+        var layer = workspace.ActiveLayer is { } activeLayer && activeLayer.Find(row.Key) is not null
+            ? activeLayer
+            : WritableOwningLayer(row);
         if (layer is null)
         {
             return WorkflowResult.Failure(
@@ -588,6 +594,9 @@ public sealed class RowAuthoringWorkflow(
         GalaxyMapLayer layer,
         Func<GalaxyMapTable, int> next)
     {
+        // Appearance data may be copied as a visual base, but a cloned Planet
+        // must never inherit the source row's material-instance identity.
+        target.SetExtraField("Shader", string.Empty);
         if (source.PlotPlanet is { } oldPlot)
         {
             var plot = GalaxyMapRowCloner.Clone(oldPlot);

@@ -56,12 +56,3 @@ public sealed class SessionChangedEventArgs(long revision, ChangeImpact impact) 
     public long Revision { get; } = revision;
     public ChangeImpact Impact { get; } = impact;
 }
-
-public sealed record FieldChange(GalaxyMapRowKey Row, string Field, object? Value);
-
-public interface IEditScope : IDisposable
-{
-    WorkflowResult Preview(IReadOnlyList<FieldChange> changes);
-    WorkflowResult Commit();
-    void Cancel();
-}

@@ -59,10 +59,21 @@
                     <ControlTemplate TargetType="ComboBox">
                         <Grid>
                             <Border x:Name="Shell" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="2" IsHitTestVisible="False" />
-                            <ContentPresenter Margin="7,4,30,4" VerticalAlignment="Center"
+                            <ContentPresenter x:Name="SelectedContent" Margin="7,4,30,4" VerticalAlignment="Center"
                                               Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                               ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" IsHitTestVisible="False" />
-                            <ToggleButton Focusable="False" HorizontalAlignment="Stretch" Background="Transparent" BorderThickness="0"
+                            <TextBox x:Name="PART_EditableTextBox"
+                                     Margin="7,2,30,2"
+                                     Padding="0"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Foreground="{TemplateBinding Foreground}"
+                                     CaretBrush="{TemplateBinding Foreground}"
+                                     VerticalContentAlignment="Center"
+                                     IsReadOnly="{TemplateBinding IsReadOnly}"
+                                     Visibility="Hidden"
+                                     Text="{Binding Text, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <ToggleButton x:Name="DropDownToggle" Focusable="False" HorizontalAlignment="Stretch" Background="Transparent" BorderThickness="0"
                                           IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
                                 <ToggleButton.Template>
                                     <ControlTemplate TargetType="ToggleButton">
@@ -97,6 +108,12 @@
                             </Popup>
                         </Grid>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="IsEditable" Value="True">
+                                <Setter TargetName="SelectedContent" Property="Visibility" Value="Hidden"/>
+                                <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="DropDownToggle" Property="Width" Value="28"/>
+                                <Setter TargetName="DropDownToggle" Property="HorizontalAlignment" Value="Right"/>
+                            </Trigger>
                             <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="Shell" Property="BorderBrush" Value="{StaticResource AccentBrush}"/></Trigger>
                             <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Shell" Property="Opacity" Value="0.45"/></Trigger>
                         </ControlTemplate.Triggers>

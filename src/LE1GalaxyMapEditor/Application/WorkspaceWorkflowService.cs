@@ -59,21 +59,140 @@ public sealed class WorkspaceWorkflowService
         }
     }
 
-    public WorkflowResult LoadReferenceFolder(string folderPath)
+    /// <summary>
+    /// Loads BASEGAME and the remembered module stack as one startup transition.
+    /// A corrupt workspace file is degraded to a usable BASEGAME-only session with
+    /// a structured diagnostic because no preceding editor state exists to preserve.
+    /// </summary>
+    public WorkflowResult LoadRememberedWorkspace()
     {
+        if (_session.Document is not null || _session.Changes.HasChanges ||
+            _session.History.CanUndo || _session.History.CanRedo)
+        {
+            return WorkflowResult.Failure(
+                "Initial workspace loading cannot replace a live editor session; use the reload workflow instead.");
+        }
+
+        return ReplaceRememberedWorkspace(transactionalReload: false);
+    }
+
+    /// <summary>
+    /// Prepares a complete replacement off-session, then accepts it atomically and
+    /// clears transient edits. Failure leaves the current workspace, edit state,
+    /// history, diagnostics, selection, and revision untouched.
+    /// </summary>
+    public WorkflowResult ReloadRememberedWorkspace(bool requireCurrentlyMountedModules = true)
+        => ReplaceRememberedWorkspace(
+            transactionalReload: true,
+            requireCurrentlyMountedModules: requireCurrentlyMountedModules);
+
+    private WorkflowResult ReplaceRememberedWorkspace(
+        bool transactionalReload,
+        bool requireCurrentlyMountedModules = false)
+    {
+        GalaxyMapLayer baseLayer;
         try
         {
-            var document = _loader.LoadFolder(folderPath);
-            _session.AttachReferenceDocument(document);
-            return WorkflowResult.Success(
-                "Loaded a read-only Legendary Explorer export folder.",
-                navigation: NavigationTarget.Galaxy,
-                impact: ChangeImpact.StructuralAll);
+            baseLayer = _loader.LoadBuiltInLayer();
         }
         catch (Exception exception) when (IsExpectedOperationFailure(exception))
         {
             return WorkflowResult.Failure(exception.Message);
         }
+
+        GalaxyMapWorkspace? candidate = null;
+        List<ValidationDiagnostic> diagnostics = [];
+        List<RememberedModule> missingModules = [];
+        string? startupFallbackError = null;
+        try
+        {
+            BeginRestoration();
+            var remembered = _workspaceStore.Load();
+            var loadedLayers = LoadRememberedLayers(
+                [baseLayer.Module.Tag],
+                remembered,
+                diagnostics,
+                missingModules);
+            candidate = new GalaxyMapWorkspace(baseLayer, loadedLayers);
+            RestoreActiveModule(candidate, remembered.ActiveModuleTag);
+
+            if (transactionalReload && requireCurrentlyMountedModules &&
+                MissingCurrentlyMountedModules(candidate) is { Count: > 0 } missingCurrent)
+            {
+                return WorkflowResult.Failure(
+                    "The remembered workspace could not recreate the currently mounted module(s): " +
+                    string.Join(", ", missingCurrent) + ". Staged changes were left intact.");
+            }
+        }
+        catch (Exception exception) when (IsExpectedOperationFailure(exception))
+        {
+            if (transactionalReload)
+            {
+                return WorkflowResult.Failure(
+                    $"The remembered workspace could not be reloaded: {exception.Message} Staged changes were left intact.");
+            }
+
+            // Startup has no earlier authoring state to protect. Keep BASEGAME usable
+            // and surface the workspace-file failure in both the banner and diagnostics.
+            var diagnostic = new ValidationDiagnostic(
+                "WORKSPACE-LOAD",
+                ValidationSeverity.Error,
+                $"Remembered workspace could not be loaded: {exception.Message}",
+                string.Empty);
+            diagnostics = [diagnostic];
+            missingModules = [];
+            candidate = new GalaxyMapWorkspace(baseLayer);
+            startupFallbackError = diagnostic.Message;
+        }
+        finally
+        {
+            _isRestoring = false;
+        }
+
+        // Acceptance is intentionally outside the preparation catch. Once edit state
+        // is cleared and the session is swapped, an observer exception must propagate;
+        // it must never be misreported as a rejected, state-preserving reload.
+        var acceptedCandidate = candidate
+            ?? throw new InvalidOperationException("A remembered workspace candidate was not prepared.");
+        AcceptRestorationDiagnostics(diagnostics, missingModules);
+        if (transactionalReload)
+        {
+            ClearTransientEditState();
+        }
+        _session.Workspace = acceptedCandidate;
+        _session.Publish(ChangeImpact.StructuralAll);
+        return startupFallbackError is null
+            ? CreateRestorationResult(acceptedCandidate, diagnostics)
+            : new WorkflowResult(
+                false,
+                "Loaded BASEGAME without remembered modules.",
+                Navigation: NavigationTarget.Galaxy,
+                Impact: ChangeImpact.StructuralAll,
+                Error: startupFallbackError);
+    }
+
+    public WorkflowResult LoadReferenceFolder(string folderPath)
+    {
+        GalaxyMapDocument document;
+        try
+        {
+            document = _loader.LoadFolder(folderPath);
+        }
+        catch (Exception exception) when (IsExpectedOperationFailure(exception))
+        {
+            return WorkflowResult.Failure(exception.Message);
+        }
+
+        // Only a fully loaded reference source supersedes remembered-workspace
+        // diagnostics. Session acceptance is outside the loader-failure catch so an
+        // observer failure cannot be misreported as preserving the previous source.
+        _startupDiagnostics.Clear();
+        _missingRememberedModules.Clear();
+        _session.AttachReferenceDocument(document);
+        return WorkflowResult.Success(
+            "Loaded a read-only Legendary Explorer export folder.",
+            navigation: NavigationTarget.Galaxy,
+            impact: ChangeImpact.StructuralAll);
     }
 
     public WorkflowResult CreateModule(
@@ -341,93 +460,122 @@ public sealed class WorkspaceWorkflowService
         }
     }
 
-    public WorkflowResult RestoreRememberedModules()
+    private void BeginRestoration()
     {
-        var workspace = _session.Workspace;
-        if (workspace is null)
-        {
-            return WorkflowResult.Failure("Load BASEGAME before restoring remembered modules.");
-        }
+        _isRestoring = true;
+    }
 
-        try
+    private void ClearTransientEditState()
+    {
+        _session.Changes.Clear();
+        _edits.ClearHistory();
+    }
+
+    private List<GalaxyMapLayer> LoadRememberedLayers(
+        IEnumerable<string> existingModuleTags,
+        RememberedWorkspace remembered,
+        List<ValidationDiagnostic> diagnostics,
+        List<RememberedModule> missingModules)
+    {
+        var loadedLayers = new List<GalaxyMapLayer>();
+        var loadedTags = existingModuleTags.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in remembered.Modules)
         {
-            _isRestoring = true;
-            _startupDiagnostics.Clear();
-            _missingRememberedModules.Clear();
-            var remembered = _workspaceStore.Load();
-            var loadedLayers = new List<GalaxyMapLayer>();
-            var loadedTags = workspace.Layers.Select(layer => layer.Module.Tag)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var entry in remembered.Modules)
+            if (!Directory.Exists(entry.FolderPath))
             {
-                if (!Directory.Exists(entry.FolderPath))
-                {
-                    _missingRememberedModules.Add(entry);
-                    _startupDiagnostics.Add(new ValidationDiagnostic(
-                        "WORKSPACE-MODULE-MISSING",
-                        ValidationSeverity.Error,
-                        $"Remembered module folder is missing: {entry.FolderPath}",
-                        entry.DiagnosticTag));
-                    continue;
-                }
-
-                try
-                {
-                    var manifestPath = Path.Combine(entry.FolderPath, GalaxyMapModuleManifestStore.FileName);
-                    var module = File.Exists(manifestPath)
-                        ? _manifestStore.Load(entry.FolderPath)
-                        : entry.UnmanifestedReadOnlyModule?.ToModule(entry.FolderPath)
-                          ?? throw new GalaxyMapLoadException(
-                              $"The remembered module folder has no {GalaxyMapModuleManifestStore.FileName}: {entry.FolderPath}");
-                    if (!loadedTags.Add(module.Tag))
-                    {
-                        throw new InvalidOperationException($"A module tagged {module.Tag} is already mounted.");
-                    }
-
-                    loadedLayers.Add(_loader.LoadPartFolder(entry.FolderPath, module));
-                }
-                catch (Exception exception) when (IsExpectedOperationFailure(exception))
-                {
-                    _startupDiagnostics.Add(new ValidationDiagnostic(
-                        "WORKSPACE-MODULE-LOAD",
-                        ValidationSeverity.Error,
-                        $"Remembered module could not be loaded: {exception.Message}",
-                        entry.DiagnosticTag));
-                }
+                missingModules.Add(entry);
+                diagnostics.Add(new ValidationDiagnostic(
+                    "WORKSPACE-MODULE-MISSING",
+                    ValidationSeverity.Error,
+                    $"Remembered module folder is missing: {entry.FolderPath}",
+                    entry.DiagnosticTag));
+                continue;
             }
 
-            workspace.MountRange(loadedLayers);
-            var active = workspace.Modules.FirstOrDefault(module => !module.IsReadOnly &&
-                string.Equals(module.Tag, remembered.ActiveModuleTag, StringComparison.OrdinalIgnoreCase))
-                ?? workspace.Modules.Where(module => !module.IsReadOnly)
-                    .OrderByDescending(module => module.LoadOrder)
-                    .FirstOrDefault();
-            if (active is not null)
+            try
             {
-                workspace.SetActiveModule(active);
-            }
+                var manifestPath = Path.Combine(entry.FolderPath, GalaxyMapModuleManifestStore.FileName);
+                var module = File.Exists(manifestPath)
+                    ? _manifestStore.Load(entry.FolderPath)
+                    : entry.UnmanifestedReadOnlyModule?.ToModule(entry.FolderPath)
+                      ?? throw new GalaxyMapLoadException(
+                          $"The remembered module folder has no {GalaxyMapModuleManifestStore.FileName}: {entry.FolderPath}");
+                if (!loadedTags.Add(module.Tag))
+                {
+                    throw new InvalidOperationException($"A module tagged {module.Tag} is already mounted.");
+                }
 
-            _session.Publish(ChangeImpact.StructuralAll);
-            var message = workspace.ModuleLayers.Count == 0
-                ? "No remembered modules were mounted."
-                : $"Restored {workspace.ModuleLayers.Count} remembered module(s).";
-            return _startupDiagnostics.Count == 0
-                ? WorkflowResult.Success(message, navigation: NavigationTarget.Galaxy, impact: ChangeImpact.StructuralAll)
-                : new WorkflowResult(
-                    false,
-                    message,
-                    Navigation: NavigationTarget.Galaxy,
-                    Impact: ChangeImpact.StructuralAll,
-                    Error: string.Join(Environment.NewLine, _startupDiagnostics.Select(item => item.Message)));
+                loadedLayers.Add(_loader.LoadPartFolder(entry.FolderPath, module));
+            }
+            catch (Exception exception) when (IsExpectedOperationFailure(exception))
+            {
+                diagnostics.Add(new ValidationDiagnostic(
+                    "WORKSPACE-MODULE-LOAD",
+                    ValidationSeverity.Error,
+                    $"Remembered module could not be loaded: {exception.Message}",
+                    entry.DiagnosticTag));
+            }
         }
-        catch (Exception exception) when (IsExpectedOperationFailure(exception))
+
+        return loadedLayers;
+    }
+
+    private List<string> MissingCurrentlyMountedModules(GalaxyMapWorkspace candidate)
+    {
+        var current = _session.Workspace;
+        if (current is null)
         {
-            return WorkflowResult.Failure(exception.Message);
+            return [];
         }
-        finally
+
+        return current.ModuleLayers
+            .Where(layer => candidate.ModuleLayers.All(candidateLayer =>
+                !string.Equals(
+                    candidateLayer.Module.FolderPath,
+                    layer.Module.FolderPath,
+                    StringComparison.OrdinalIgnoreCase)))
+            .Select(layer => $"{layer.Module.Name} [{layer.Module.Tag}]")
+            .ToList();
+    }
+
+    private void AcceptRestorationDiagnostics(
+        IEnumerable<ValidationDiagnostic> diagnostics,
+        IEnumerable<RememberedModule> missingModules)
+    {
+        _startupDiagnostics.Clear();
+        _startupDiagnostics.AddRange(diagnostics);
+        _missingRememberedModules.Clear();
+        _missingRememberedModules.AddRange(missingModules);
+    }
+
+    private static void RestoreActiveModule(GalaxyMapWorkspace workspace, string? activeModuleTag)
+    {
+        var active = workspace.Modules.FirstOrDefault(module => !module.IsReadOnly &&
+            string.Equals(module.Tag, activeModuleTag, StringComparison.OrdinalIgnoreCase))
+            ?? workspace.Modules.Where(module => !module.IsReadOnly)
+                .OrderByDescending(module => module.LoadOrder)
+                .FirstOrDefault();
+        if (active is not null)
         {
-            _isRestoring = false;
+            workspace.SetActiveModule(active);
         }
+    }
+
+    private static WorkflowResult CreateRestorationResult(
+        GalaxyMapWorkspace workspace,
+        IReadOnlyCollection<ValidationDiagnostic> diagnostics)
+    {
+        var message = workspace.ModuleLayers.Count == 0
+            ? "No remembered modules were mounted."
+            : $"Restored {workspace.ModuleLayers.Count} remembered module(s).";
+        return diagnostics.Count == 0
+            ? WorkflowResult.Success(message, navigation: NavigationTarget.Galaxy, impact: ChangeImpact.StructuralAll)
+            : new WorkflowResult(
+                false,
+                message,
+                Navigation: NavigationTarget.Galaxy,
+                Impact: ChangeImpact.StructuralAll,
+                Error: string.Join(Environment.NewLine, diagnostics.Select(item => item.Message)));
     }
 
     public void RememberCurrentWorkspace()
@@ -498,24 +646,6 @@ public sealed class WorkspaceWorkflowService
             new RowIdRange(10_000, 19_999),
             new RowIdRange(1_000, 1_999),
             new RowIdRange(1_000, 1_999));
-
-    public static string SuggestedTag(string value)
-    {
-        var builder = new StringBuilder();
-        foreach (var character in value.ToUpperInvariant())
-        {
-            if (char.IsLetterOrDigit(character) || character is '_' or '-')
-            {
-                builder.Append(character);
-            }
-            else if (builder.Length > 0 && builder[^1] != '_')
-            {
-                builder.Append('_');
-            }
-        }
-
-        return builder.ToString().Trim('_', '-') is { Length: > 0 } tag ? tag : "MODULE";
-    }
 
     private void ClearStartupIssueFor(string tag, string? folderPath)
     {
@@ -606,7 +736,7 @@ public sealed class WorkspaceWorkflowService
         }
 
         var result = builder.ToString().Trim(' ', '.');
-        return result.Length == 0 ? SuggestedTag(fallback) : result;
+        return result.Length == 0 ? GalaxyMapModule.SuggestTag(fallback) : result;
     }
 
     private static bool IsExpectedOperationFailure(Exception exception)
