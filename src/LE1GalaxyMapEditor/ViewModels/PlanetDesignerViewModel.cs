@@ -16,6 +16,8 @@ public sealed class PlanetAppearanceComponentViewModel : ObservableObject
     private readonly bool _numeric;
     private readonly bool _textureReference;
     private readonly Action _changed;
+    private readonly Dictionary<string, string> _textureReferencesByDisplayName =
+        new(StringComparer.OrdinalIgnoreCase);
     private string _validationError = string.Empty;
 
     public PlanetAppearanceComponentViewModel(
@@ -36,6 +38,7 @@ public sealed class PlanetAppearanceComponentViewModel : ObservableObject
 
     public string Column { get; }
     public string Label { get; }
+    public string RawValue => _appearance[Column];
     public string Value
     {
         get => _textureReference
@@ -44,12 +47,16 @@ public sealed class PlanetAppearanceComponentViewModel : ObservableObject
         set
         {
             value ??= string.Empty;
-            if (string.Equals(Value, value, StringComparison.Ordinal))
+            var storedValue = _textureReference &&
+                              _textureReferencesByDisplayName.TryGetValue(value.Trim(), out var textureReference)
+                ? textureReference
+                : value;
+            if (string.Equals(RawValue, storedValue, StringComparison.Ordinal))
             {
                 return;
             }
 
-            _appearance[Column] = value;
+            _appearance[Column] = storedValue;
             Validate();
             OnPropertyChanged();
             OnPropertyChanged(nameof(NumericValue));
@@ -84,6 +91,20 @@ public sealed class PlanetAppearanceComponentViewModel : ObservableObject
         OnPropertyChanged(nameof(NumericValue));
     }
 
+    public void SetTextureReferences(IEnumerable<string> references)
+    {
+        if (!_textureReference)
+        {
+            return;
+        }
+
+        _textureReferencesByDisplayName.Clear();
+        foreach (var reference in references.Where(value => !string.IsNullOrWhiteSpace(value)))
+        {
+            _textureReferencesByDisplayName[PlanetAppearanceCodec.TextureDisplayName(reference)] = reference;
+        }
+    }
+
     private void Validate()
     {
         ValidationError = _numeric && !PlanetAppearanceCodec.TryParseFloat(Value, out _)
@@ -97,6 +118,15 @@ public sealed class PlanetAppearanceFieldViewModel : ObservableObject
     public PlanetAppearanceFieldViewModel(
         PlanetAppearance appearance,
         PlanetAppearancePropertyDefinition definition,
+        Action changed)
+        : this(appearance, definition, [], changed)
+    {
+    }
+
+    public PlanetAppearanceFieldViewModel(
+        PlanetAppearance appearance,
+        PlanetAppearancePropertyDefinition definition,
+        IEnumerable<string> additionalTextureOptions,
         Action changed)
     {
         Definition = definition;
@@ -121,10 +151,8 @@ public sealed class PlanetAppearanceFieldViewModel : ObservableObject
         VisibleComponents = Editor == PlanetAppearanceEditorKind.MixerVector
             ? Components.Take(definition.ComponentLabels?.Count ?? 3).ToArray()
             : Components;
-        TextureOptions = new ObservableCollection<string>((definition.TextureOptions ?? [])
-            .Append(Primary.Value)
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase));
+        TextureOptions = [];
+        RefreshTextureOptions(additionalTextureOptions);
     }
 
     public PlanetAppearancePropertyDefinition Definition { get; }
@@ -175,6 +203,32 @@ public sealed class PlanetAppearanceFieldViewModel : ObservableObject
         OnPropertyChanged(nameof(ColorSummary));
     }
 
+    public void RefreshTextureOptions(IEnumerable<string> additionalTextureOptions)
+    {
+        if (!IsTexture)
+        {
+            return;
+        }
+
+        var references = (Definition.TextureOptions ?? [])
+            .Concat(additionalTextureOptions)
+            .Append(Primary.RawValue)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        Primary.SetTextureReferences(references);
+        var options = references
+            .Select(PlanetAppearanceCodec.TextureDisplayName)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var option in options)
+        {
+            if (!TextureOptions.Contains(option, StringComparer.OrdinalIgnoreCase))
+            {
+                TextureOptions.Add(option);
+            }
+        }
+    }
+
     private double[] GetColorValues()
     {
         if (IsPackedColor)
@@ -213,6 +267,7 @@ public sealed record PlanetAppearanceGroupViewModel(
     string Name,
     string Description,
     bool ExpandedByDefault,
+    bool ShowLinkTextureButton,
     IReadOnlyList<PlanetAppearanceFieldViewModel> Fields);
 
 public enum PlanetDesignerNavigationChoice
@@ -234,6 +289,8 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     private readonly Func<bool> _canUndo;
     private readonly Func<bool> _canRedo;
     private readonly Func<GalaxyMapRowKey, string?, Planet?> _resolvePlanet;
+    private readonly Func<PlanetTextureLinkRequest, WorkflowResult> _linkTexture;
+    private readonly Func<string, Rendering.PlanetPreviewTextureSource?> _resolvePreviewTexture;
     private readonly PlanetAppearanceTemplateStore _templates;
     private IReadOnlyList<PlanetAppearancePreset> _allPresets;
     private string _presetSearch = string.Empty;
@@ -258,6 +315,33 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         Func<bool> canRedo,
         Func<GalaxyMapRowKey, string?, Planet?> resolvePlanet,
         PlanetAppearanceTemplateStore? templates = null)
+        : this(
+            workspace,
+            session,
+            apply,
+            undo,
+            redo,
+            canUndo,
+            canRedo,
+            resolvePlanet,
+            _ => WorkflowResult.Failure("Planet texture linking is unavailable in this context."),
+            _ => null,
+            templates)
+    {
+    }
+
+    public PlanetDesignerViewModel(
+        Func<GalaxyMapWorkspace?> workspace,
+        PlanetDesignerSession session,
+        Func<PlanetDesignerSession, WorkflowResult> apply,
+        Func<GalaxyMapRowKey, bool> undo,
+        Func<GalaxyMapRowKey, bool> redo,
+        Func<bool> canUndo,
+        Func<bool> canRedo,
+        Func<GalaxyMapRowKey, string?, Planet?> resolvePlanet,
+        Func<PlanetTextureLinkRequest, WorkflowResult> linkTexture,
+        Func<string, Rendering.PlanetPreviewTextureSource?> resolvePreviewTexture,
+        PlanetAppearanceTemplateStore? templates = null)
     {
         _workspace = workspace;
         _session = session;
@@ -267,6 +351,8 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         _canUndo = canUndo;
         _canRedo = canRedo;
         _resolvePlanet = resolvePlanet;
+        _linkTexture = linkTexture;
+        _resolvePreviewTexture = resolvePreviewTexture;
         _templates = templates ?? new PlanetAppearanceTemplateStore();
         _allPresets = workspace() is { } currentWorkspace
             ? PlanetAppearancePresetCatalog.Build(currentWorkspace)
@@ -388,6 +474,9 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     public Rendering.PlanetRenderMaterial CreateRenderMaterial() =>
         PlanetAppearanceCodec.ToRenderMaterial(_session.Draft);
 
+    public Rendering.PlanetPreviewTextureSource? ResolvePreviewTexture(string inMemoryPath) =>
+        _resolvePreviewTexture(inMemoryPath);
+
     public Rendering.PlanetPreviewOptions CreatePreviewOptions() => new(
         Lit: ShowLighting,
         PointLights: ShowLighting,
@@ -492,6 +581,21 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     }
 
     public bool TryApply() => ApplyCore();
+
+    public bool LinkModuleTexture(PlanetTextureLinkRequest request)
+    {
+        var result = _linkTexture(request);
+        if (!result.Succeeded)
+        {
+            ErrorMessage = result.Error ?? result.Message;
+            return false;
+        }
+
+        RefreshTextureOptions();
+        StatusMessage = result.Message;
+        ErrorMessage = string.Empty;
+        return true;
+    }
 
     public void SetPreview(ImageSource image, TimeSpan renderTime, IReadOnlyList<string> missingTextures)
     {
@@ -648,19 +752,57 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         }
     }
 
+    private void RefreshTextureOptions()
+    {
+        foreach (var group in Groups)
+        {
+            var options = GetModuleTextureOptions(group.Name);
+            foreach (var field in group.Fields)
+            {
+                field.RefreshTextureOptions(options);
+            }
+        }
+    }
+
     private IReadOnlyList<PlanetAppearanceGroupViewModel> CreateGroups(PlanetAppearance appearance) =>
         PlanetAppearanceSchema.Groups
             .Select(group => new PlanetAppearanceGroupViewModel(
                 group.Name,
                 group.Description,
                 group.ExpandedByDefault,
+                string.Equals(group.Name, "Identity", StringComparison.Ordinal),
                 PlanetAppearanceSchema.Properties
                     .Where(property => property.Group == group.Name)
                     .Select(definition => new PlanetAppearanceFieldViewModel(
                         appearance,
                         definition,
+                        GetModuleTextureOptions(group.Name),
                         AppearanceChanged)).ToArray()))
             .ToArray();
+
+    private IEnumerable<string> GetModuleTextureOptions(string groupName)
+    {
+        var category = groupName switch
+        {
+            "Continent / Landmass" => PlanetTextureCategory.Continent,
+            "Normals" => PlanetTextureCategory.Normals,
+            "Ocean" => PlanetTextureCategory.Ocean,
+            "City Emissive" => PlanetTextureCategory.CityEmissive,
+            "Atmosphere / Horizon" => PlanetTextureCategory.Atmosphere,
+            _ => PlanetTextureCategory.None
+        };
+        if (category == PlanetTextureCategory.None || _workspace() is not { } workspace)
+        {
+            return [];
+        }
+
+        return workspace.Layers
+            .SelectMany(layer => layer.Module.PlanetTextureLinks)
+            .Where(link => (link.Categories & category) != 0)
+            .Select(link => link.InMemoryPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
 
     private void RefreshPresetCatalog()
     {

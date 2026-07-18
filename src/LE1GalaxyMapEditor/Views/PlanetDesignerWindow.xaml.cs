@@ -21,6 +21,8 @@ public partial class PlanetDesignerWindow : Window
     private readonly DispatcherTimer _resizeTimer;
     private readonly Stopwatch _animationClock = new();
     private readonly PlanetDesignerWindowDiagnostics _diagnostics = new();
+    private readonly Dictionary<string, PlanetPreviewTextureSource> _previewTextureSources =
+        new(StringComparer.OrdinalIgnoreCase);
     private PlanetPreviewRenderer? _renderer;
     private WriteableBitmap? _previewBitmap;
     private byte[]? _previewPixels;
@@ -138,12 +140,16 @@ public partial class PlanetDesignerWindow : Window
         var target = GetPreviewResolution();
         var initialKey = ViewModel.PlanetKey;
         var material = ViewModel.CreateRenderMaterial();
+        CachePreviewTextureSources(material);
         var options = ViewModel.CreatePreviewOptions();
         try
         {
             var initialized = await Task.Run(() =>
             {
-                var renderer = new PlanetPreviewRenderer(target.Width, target.Height);
+                var renderer = new PlanetPreviewRenderer(
+                    target.Width,
+                    target.Height,
+                    materialTextureResolver: name => _previewTextureSources.GetValueOrDefault(name));
                 try
                 {
                     return (Renderer: renderer, Frame: renderer.Render(material, options, 0));
@@ -340,8 +346,10 @@ public partial class PlanetDesignerWindow : Window
             _accumulatedAnimationTime += (now - _lastClockTime) * ViewModel.CloudSpeed;
             _lastClockTime = now;
 
+            var material = ViewModel.CreateRenderMaterial();
+            CachePreviewTextureSources(material);
             var frame = _renderer.Render(
-                ViewModel.CreateRenderMaterial(),
+                material,
                 ViewModel.CreatePreviewOptions(),
                 _previewPixels,
                 (float)_accumulatedAnimationTime);
@@ -373,6 +381,32 @@ public partial class PlanetDesignerWindow : Window
         _diagnostics.RecordFramePresented();
     }
 
+    private void CachePreviewTextureSources(PlanetRenderMaterial material)
+    {
+        string[] references =
+        [
+            material.NormalMap,
+            material.CityEmissive,
+            material.ContinentMask01,
+            material.ContinentMask02,
+            material.ContinentTexture,
+            material.OceanTexture,
+            material.AtmosphereMaster
+        ];
+        foreach (var reference in references.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            if (ViewModel.ResolvePreviewTexture(reference) is { } source)
+            {
+                _previewTextureSources[reference] = source;
+            }
+            else
+            {
+                _previewTextureSources.Remove(reference);
+            }
+        }
+    }
+
     private void DisposeRenderer(PlanetPreviewRenderer renderer)
     {
         renderer.Dispose();
@@ -395,6 +429,15 @@ public partial class PlanetDesignerWindow : Window
         _accumulatedAnimationTime = 0;
         _lastClockTime = _animationClock.Elapsed.TotalSeconds;
         RenderPreview();
+    }
+
+    private void LinkModuleTexture_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        var dialog = new PlanetTextureLinkWindow { Owner = this };
+        if (dialog.ShowDialog() == true)
+        {
+            ViewModel.LinkModuleTexture(dialog.Request);
+        }
     }
 
     public bool NavigateToPlanet(GalaxyMapRowKey key, string? moduleTag = null) =>

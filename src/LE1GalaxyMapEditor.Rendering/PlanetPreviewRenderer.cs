@@ -15,6 +15,8 @@ using Matrix = SharpDX.Matrix;
 
 namespace LE1GalaxyMapEditor.Rendering;
 
+public sealed record PlanetPreviewTextureSource(string CacheKey, byte[] Contents);
+
 public sealed class PlanetPreviewRenderer : IDisposable
 {
     private int _width;
@@ -22,6 +24,7 @@ public sealed class PlanetPreviewRenderer : IDisposable
     private readonly Device _device;
     private readonly DeviceContext _context;
     private readonly string _resourceRoot;
+    private readonly Func<string, PlanetPreviewTextureSource?>? _materialTextureResolver;
     private readonly Dictionary<(string FileName, bool Srgb), TextureResource> _textureCache = [];
     private readonly HashSet<string> _missingTextures = new(StringComparer.OrdinalIgnoreCase);
 
@@ -31,12 +34,21 @@ public sealed class PlanetPreviewRenderer : IDisposable
     private PixelShader _coronaPixelShader = null!;
     private VertexShader _backgroundVertexShader = null!;
     private PixelShader _backgroundPixelShader = null!;
+    private VertexShader _postProcessVertexShader = null!;
+    private PixelShader _bloomExtractPixelShader = null!;
+    private PixelShader _bloomBlurPixelShader = null!;
+    private PixelShader _compositePixelShader = null!;
     private InputLayout _inputLayout = null!;
     private MeshBuffers _planetMesh = null!;
     private MeshBuffers _coronaMesh = null!;
     private Buffer _sceneBuffer = null!;
     private Buffer _materialBuffer = null!;
     private Buffer _coronaMaterialBuffer = null!;
+    private Buffer _postProcessBuffer = null!;
+    private Texture2D _sceneTexture = null!;
+    private RenderTargetView _sceneRenderTarget = null!;
+    private ShaderResourceView _sceneShaderResource = null!;
+    private BloomLevel[] _bloomLevels = [];
     private Texture2D _renderTexture = null!;
     private RenderTargetView _renderTarget = null!;
     private Texture2D _depthTexture = null!;
@@ -44,17 +56,23 @@ public sealed class PlanetPreviewRenderer : IDisposable
     private Texture2D _stagingTexture = null!;
     private RasterizerState _rasterizer = null!;
     private SamplerState _sampler = null!;
+    private SamplerState _postProcessSampler = null!;
     private BlendState _coronaBlendState = null!;
     private DepthStencilState _coronaDepthState = null!;
     private DepthStencilState _backgroundDepthState = null!;
     private TextureResource _coronaGradient = null!;
     private TextureResource _starsBackground = null!;
 
-    public PlanetPreviewRenderer(int width, int height, string? resourceRoot = null)
+    public PlanetPreviewRenderer(
+        int width,
+        int height,
+        string? resourceRoot = null,
+        Func<string, PlanetPreviewTextureSource?>? materialTextureResolver = null)
     {
         _width = width;
         _height = height;
         _resourceRoot = resourceRoot ?? Path.Combine(AppContext.BaseDirectory, "resources", "planet-designer");
+        _materialTextureResolver = materialTextureResolver;
         try
         {
             _device = new Device(DriverType.Hardware, DeviceCreationFlags.BgraSupport);
@@ -87,6 +105,16 @@ public sealed class PlanetPreviewRenderer : IDisposable
         _backgroundVertexShader = new VertexShader(_device, backgroundVertexBytecode);
         _backgroundPixelShader = new PixelShader(_device, backgroundPixelBytecode);
 
+        var postProcessShaderPath = Path.Combine(_resourceRoot, "Shaders", "PostProcess.hlsl");
+        using var postProcessVertexBytecode = CompileShader(postProcessShaderPath, "VSMain", "vs_5_0");
+        using var bloomExtractBytecode = CompileShader(postProcessShaderPath, "BloomExtractPS", "ps_5_0");
+        using var bloomBlurBytecode = CompileShader(postProcessShaderPath, "BloomBlurPS", "ps_5_0");
+        using var compositeBytecode = CompileShader(postProcessShaderPath, "CompositePS", "ps_5_0");
+        _postProcessVertexShader = new VertexShader(_device, postProcessVertexBytecode);
+        _bloomExtractPixelShader = new PixelShader(_device, bloomExtractBytecode);
+        _bloomBlurPixelShader = new PixelShader(_device, bloomBlurBytecode);
+        _compositePixelShader = new PixelShader(_device, compositeBytecode);
+
         var inputElements = new[]
         {
             new InputElement("POSITION", 0, Format.R32G32B32_Float, 0, 0),
@@ -107,6 +135,7 @@ public sealed class PlanetPreviewRenderer : IDisposable
         _sceneBuffer = CreateConstantBuffer<SceneConstants>();
         _materialBuffer = CreateConstantBuffer<MaterialConstants>();
         _coronaMaterialBuffer = CreateConstantBuffer<CoronaMaterialConstants>();
+        _postProcessBuffer = CreateConstantBuffer<PostProcessConstants>();
 
         CreateRenderTargets();
         _rasterizer = new RasterizerState(_device, new RasterizerStateDescription
@@ -121,6 +150,14 @@ public sealed class PlanetPreviewRenderer : IDisposable
             AddressU = TextureAddressMode.Wrap,
             AddressV = TextureAddressMode.Wrap,
             AddressW = TextureAddressMode.Wrap,
+            MaximumLod = float.MaxValue
+        });
+        _postProcessSampler = new SamplerState(_device, new SamplerStateDescription
+        {
+            Filter = Filter.MinMagMipLinear,
+            AddressU = TextureAddressMode.Clamp,
+            AddressV = TextureAddressMode.Clamp,
+            AddressW = TextureAddressMode.Clamp,
             MaximumLod = float.MaxValue
         });
 
@@ -152,13 +189,31 @@ public sealed class PlanetPreviewRenderer : IDisposable
             IsStencilEnabled = false
         });
         _coronaGradient = LoadTexture("GXM_CoronaGradient.png", useSrgb: true);
-        // Sample as display-ready bytes because the planet shader performs its
-        // own output encoding into this UNorm preview target.
-        _starsBackground = LoadTexture("stars_bg.jpg", useSrgb: false);
+        // Hardware sRGB decoding puts the background into the same linear scene
+        // space as the mesh shaders before the full-screen postprocess.
+        _starsBackground = LoadTexture("stars_bg.jpg", useSrgb: true);
     }
 
     private void CreateRenderTargets()
     {
+        _sceneTexture = new Texture2D(_device, new Texture2DDescription
+        {
+            Width = _width,
+            Height = _height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = Format.R16G16B16A16_Float,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource
+        });
+        _sceneRenderTarget = new RenderTargetView(_device, _sceneTexture);
+        _sceneShaderResource = new ShaderResourceView(_device, _sceneTexture);
+
+        // The measured UE3 halo is a single sigma ~= 6.86 px Gaussian at
+        // 1080p. This quarter-resolution pass produces sigma ~= 6.55 px.
+        _bloomLevels = [CreateBloomLevel(4, blurIterations: 1)];
+
         _renderTexture = new Texture2D(_device, new Texture2DDescription
         {
             Width = _width,
@@ -197,6 +252,37 @@ public sealed class PlanetPreviewRenderer : IDisposable
         });
     }
 
+    private BloomLevel CreateBloomLevel(int divisor, int blurIterations)
+    {
+        var width = Math.Max(1, (_width + divisor - 1) / divisor);
+        var height = Math.Max(1, (_height + divisor - 1) / divisor);
+        return new BloomLevel(
+            width,
+            height,
+            blurIterations,
+            CreatePostProcessTarget(width, height),
+            CreatePostProcessTarget(width, height));
+    }
+
+    private PostProcessTarget CreatePostProcessTarget(int width, int height)
+    {
+        var texture = new Texture2D(_device, new Texture2DDescription
+        {
+            Width = width,
+            Height = height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = Format.R16G16B16A16_Float,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource
+        });
+        return new PostProcessTarget(
+            texture,
+            new RenderTargetView(_device, texture),
+            new ShaderResourceView(_device, texture));
+    }
+
     public void Resize(int width, int height)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
@@ -207,14 +293,27 @@ public sealed class PlanetPreviewRenderer : IDisposable
         }
 
         _context.ClearState();
+        DisposeRenderTargets();
+        _width = width;
+        _height = height;
+        CreateRenderTargets();
+    }
+
+    private void DisposeRenderTargets()
+    {
         _stagingTexture.Dispose();
         _depthView.Dispose();
         _depthTexture.Dispose();
         _renderTarget.Dispose();
         _renderTexture.Dispose();
-        _width = width;
-        _height = height;
-        CreateRenderTargets();
+        foreach (var bloomLevel in _bloomLevels)
+        {
+            bloomLevel.Dispose();
+        }
+        _bloomLevels = [];
+        _sceneShaderResource.Dispose();
+        _sceneRenderTarget.Dispose();
+        _sceneTexture.Dispose();
     }
 
     private Buffer CreateConstantBuffer<T>() where T : struct => new(
@@ -380,10 +479,10 @@ public sealed class PlanetPreviewRenderer : IDisposable
             light1Position,
             light2Position);
 
-        _context.OutputMerger.SetTargets(_depthView, _renderTarget);
+        _context.OutputMerger.SetTargets(_depthView, _sceneRenderTarget);
         _context.Rasterizer.SetViewport(0, 0, _width, _height);
         _context.Rasterizer.State = _rasterizer;
-        _context.ClearRenderTargetView(_renderTarget, new Color4(0.003f, 0.005f, 0.012f, 1));
+        _context.ClearRenderTargetView(_sceneRenderTarget, new Color4(0.003f, 0.005f, 0.012f, 1));
         _context.ClearDepthStencilView(_depthView, DepthStencilClearFlags.Depth, 1, 0);
         if (validationMode.Stars)
         {
@@ -415,11 +514,11 @@ public sealed class PlanetPreviewRenderer : IDisposable
                 view,
                 projection,
                 cameraPosition,
-                validationMode.PostProcessed,
                 material,
                 transforms);
         }
 
+        ApplyPostProcess(validationMode.PostProcessed);
         return ReadTexture(destination);
     }
 
@@ -444,7 +543,6 @@ public sealed class PlanetPreviewRenderer : IDisposable
         Matrix view,
         Matrix projection,
         Vector3 cameraPosition,
-        bool postProcessed,
         PlanetRenderMaterial material,
         PreviewTransformSettings transforms)
     {
@@ -465,7 +563,7 @@ public sealed class PlanetPreviewRenderer : IDisposable
             World = world,
             WorldViewProjection = world * view * projection,
             CameraPosition = new Vector4(cameraPosition, 1),
-            RenderOptions = new Vector4(0, postProcessed ? 1 : 0, 0, 0)
+            RenderOptions = new Vector4(0, 0, 0, 0)
         };
         var coronaMaterial = new CoronaMaterialConstants
         {
@@ -496,8 +594,86 @@ public sealed class PlanetPreviewRenderer : IDisposable
         _context.OutputMerger.SetDepthStencilState(null);
     }
 
+    private void ApplyPostProcess(bool enabled)
+    {
+        var constants = new PostProcessConstants
+        {
+            BloomParameters = new Vector4(
+                1.5f,
+                0.34f,
+                0.5f,
+                enabled ? 1 : 0),
+            PassParameters = Vector4.Zero
+        };
+
+        _context.InputAssembler.InputLayout = null;
+        _context.InputAssembler.PrimitiveTopology = PrimitiveTopology.TriangleList;
+        _context.InputAssembler.SetVertexBuffers(0, new VertexBufferBinding(null, 0, 0));
+        _context.InputAssembler.SetIndexBuffer(null, Format.Unknown, 0);
+        _context.VertexShader.Set(_postProcessVertexShader);
+        _context.PixelShader.SetConstantBuffer(0, _postProcessBuffer);
+        _context.PixelShader.SetSampler(0, _postProcessSampler);
+        _context.OutputMerger.SetBlendState(null);
+        _context.OutputMerger.SetDepthStencilState(_backgroundDepthState);
+
+        if (enabled)
+        {
+            foreach (var bloomLevel in _bloomLevels)
+            {
+                constants.PassParameters = new Vector4(0, 0, 1f / bloomLevel.Width, 1f / bloomLevel.Height);
+                _context.Rasterizer.SetViewport(0, 0, bloomLevel.Width, bloomLevel.Height);
+                _context.OutputMerger.SetTargets((DepthStencilView?)null, bloomLevel.A.RenderTarget);
+                _context.PixelShader.Set(_bloomExtractPixelShader);
+                _context.PixelShader.SetShaderResource(0, _sceneShaderResource);
+                _context.UpdateSubresource(ref constants, _postProcessBuffer);
+                _context.Draw(3, 0);
+                _context.PixelShader.SetShaderResource(0, null);
+
+                for (var iteration = 0; iteration < bloomLevel.BlurIterations; iteration++)
+                {
+                    constants.PassParameters.X = 1;
+                    constants.PassParameters.Y = 0;
+                    _context.OutputMerger.SetTargets((DepthStencilView?)null, bloomLevel.B.RenderTarget);
+                    _context.PixelShader.Set(_bloomBlurPixelShader);
+                    _context.PixelShader.SetShaderResource(1, bloomLevel.A.ShaderResource);
+                    _context.UpdateSubresource(ref constants, _postProcessBuffer);
+                    _context.Draw(3, 0);
+                    _context.PixelShader.SetShaderResource(1, null);
+
+                    constants.PassParameters.X = 0;
+                    constants.PassParameters.Y = 1;
+                    _context.OutputMerger.SetTargets((DepthStencilView?)null, bloomLevel.A.RenderTarget);
+                    _context.PixelShader.SetShaderResource(1, bloomLevel.B.ShaderResource);
+                    _context.UpdateSubresource(ref constants, _postProcessBuffer);
+                    _context.Draw(3, 0);
+                    _context.PixelShader.SetShaderResource(1, null);
+                }
+            }
+        }
+
+        constants.PassParameters = Vector4.Zero;
+        _context.Rasterizer.SetViewport(0, 0, _width, _height);
+        _context.OutputMerger.SetTargets((DepthStencilView?)null, _renderTarget);
+        _context.PixelShader.Set(_compositePixelShader);
+        _context.PixelShader.SetShaderResource(0, _sceneShaderResource);
+        for (var index = 0; index < _bloomLevels.Length; index++)
+        {
+            _context.PixelShader.SetShaderResource(index + 1, enabled ? _bloomLevels[index].A.ShaderResource : null);
+        }
+        _context.UpdateSubresource(ref constants, _postProcessBuffer);
+        _context.Draw(3, 0);
+
+        _context.PixelShader.SetShaderResources(0, new ShaderResourceView?[2]);
+        _context.OutputMerger.SetDepthStencilState(null);
+    }
+
     private TextureResource LoadMaterialTexture(string name, string fallback, bool useSrgb)
     {
+        if (_materialTextureResolver?.Invoke(name) is { } custom)
+        {
+            return LoadTextureBytes($"custom:{custom.CacheKey}", custom.Contents, useSrgb);
+        }
+
         var normalized = string.IsNullOrWhiteSpace(name) ? fallback : name;
         var dot = normalized.LastIndexOf('.');
         if (dot >= 0)
@@ -519,14 +695,25 @@ public sealed class PlanetPreviewRenderer : IDisposable
 
     private TextureResource LoadTexture(string fileName, bool useSrgb)
     {
-        var cacheKey = (fileName, useSrgb);
+        var path = Path.Combine(_resourceRoot, "Textures", fileName);
+        using var stream = File.OpenRead(path);
+        return LoadTextureStream(fileName, stream, useSrgb);
+    }
+
+    private TextureResource LoadTextureBytes(string cacheName, byte[] contents, bool useSrgb)
+    {
+        using var stream = new MemoryStream(contents, writable: false);
+        return LoadTextureStream(cacheName, stream, useSrgb);
+    }
+
+    private TextureResource LoadTextureStream(string cacheName, Stream stream, bool useSrgb)
+    {
+        var cacheKey = (cacheName, useSrgb);
         if (_textureCache.TryGetValue(cacheKey, out var cachedTexture))
         {
             return cachedTexture;
         }
 
-        var path = Path.Combine(_resourceRoot, "Textures", fileName);
-        using var stream = File.OpenRead(path);
         var decoder = BitmapDecoder.Create(
             stream,
             BitmapCreateOptions.PreservePixelFormat,
@@ -645,13 +832,11 @@ public sealed class PlanetPreviewRenderer : IDisposable
         _coronaDepthState.Dispose();
         _backgroundDepthState.Dispose();
         _coronaBlendState.Dispose();
+        _postProcessSampler.Dispose();
         _sampler.Dispose();
         _rasterizer.Dispose();
-        _stagingTexture.Dispose();
-        _depthView.Dispose();
-        _depthTexture.Dispose();
-        _renderTarget.Dispose();
-        _renderTexture.Dispose();
+        DisposeRenderTargets();
+        _postProcessBuffer.Dispose();
         _coronaMaterialBuffer.Dispose();
         _materialBuffer.Dispose();
         _sceneBuffer.Dispose();
@@ -662,6 +847,10 @@ public sealed class PlanetPreviewRenderer : IDisposable
         _coronaVertexShader.Dispose();
         _backgroundPixelShader.Dispose();
         _backgroundVertexShader.Dispose();
+        _compositePixelShader.Dispose();
+        _bloomBlurPixelShader.Dispose();
+        _bloomExtractPixelShader.Dispose();
+        _postProcessVertexShader.Dispose();
         _planetPixelShader.Dispose();
         _planetVertexShader.Dispose();
         foreach (var texture in _textureCache.Values)
@@ -782,6 +971,40 @@ public sealed class PlanetPreviewRenderer : IDisposable
     {
         public Vector4 CoronaColor;
         public Vector4 CoronaScalars;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PostProcessConstants
+    {
+        public Vector4 BloomParameters;
+        public Vector4 PassParameters;
+    }
+
+    private sealed record PostProcessTarget(
+        Texture2D Texture,
+        RenderTargetView RenderTarget,
+        ShaderResourceView ShaderResource) : IDisposable
+    {
+        public void Dispose()
+        {
+            ShaderResource.Dispose();
+            RenderTarget.Dispose();
+            Texture.Dispose();
+        }
+    }
+
+    private sealed record BloomLevel(
+        int Width,
+        int Height,
+        int BlurIterations,
+        PostProcessTarget A,
+        PostProcessTarget B) : IDisposable
+    {
+        public void Dispose()
+        {
+            B.Dispose();
+            A.Dispose();
+        }
     }
 
     private sealed record MeshBuffers(Buffer VertexBuffer, Buffer IndexBuffer, int IndexCount) : IDisposable

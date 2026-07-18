@@ -16,6 +16,27 @@ public enum ModuleColor
     Magenta
 }
 
+[Flags]
+public enum PlanetTextureCategory
+{
+    None = 0,
+    Continent = 1 << 0,
+    Normals = 1 << 1,
+    Ocean = 1 << 2,
+    CityEmissive = 1 << 3,
+    Atmosphere = 1 << 4
+}
+
+/// <summary>
+/// Editor metadata which keeps a staged preview image independent from the
+/// seek-free texture reference written to GalaxyMap_Planet.csv.
+/// </summary>
+public sealed record PlanetTextureLink(
+    string Id,
+    string InMemoryPath,
+    string RelativePath,
+    PlanetTextureCategory Categories);
+
 public readonly record struct RowIdRange
 {
     public RowIdRange(int start, int end)
@@ -86,6 +107,7 @@ public sealed partial class GalaxyMapModule
         loadOrder: 0,
         ModuleIdReservations.Empty,
         clusterTextureLinks: null,
+        planetTextureLinks: null,
         isBaseGame: true);
 
     public GalaxyMapModule(
@@ -96,9 +118,10 @@ public sealed partial class GalaxyMapModule
         bool isReadOnly,
         int loadOrder,
         ModuleIdReservations? reservations = null,
-        IReadOnlyDictionary<int, string>? clusterTextureLinks = null)
+        IReadOnlyDictionary<int, string>? clusterTextureLinks = null,
+        IReadOnlyList<PlanetTextureLink>? planetTextureLinks = null)
         : this(name, tag, color, folderPath, isReadOnly, loadOrder,
-            reservations ?? ModuleIdReservations.Empty, clusterTextureLinks, isBaseGame: false)
+            reservations ?? ModuleIdReservations.Empty, clusterTextureLinks, planetTextureLinks, isBaseGame: false)
     {
     }
 
@@ -111,6 +134,7 @@ public sealed partial class GalaxyMapModule
         int loadOrder,
         ModuleIdReservations reservations,
         IReadOnlyDictionary<int, string>? clusterTextureLinks,
+        IReadOnlyList<PlanetTextureLink>? planetTextureLinks,
         bool isBaseGame)
     {
         Name = RequireValue(name, nameof(name));
@@ -146,6 +170,13 @@ public sealed partial class GalaxyMapModule
         ClusterTextureLinks = new Dictionary<int, string>(
             clusterTextureLinks ?? new Dictionary<int, string>(),
             EqualityComparer<int>.Default);
+        PlanetTextureLinks = (planetTextureLinks ?? [])
+            .Select(link => new PlanetTextureLink(
+                RequireValue(link.Id, nameof(planetTextureLinks)),
+                RequireValue(link.InMemoryPath, nameof(planetTextureLinks)),
+                RequireValue(link.RelativePath, nameof(planetTextureLinks)),
+                link.Categories))
+            .ToArray();
         IsBaseGame = isBaseGame;
     }
 
@@ -157,6 +188,7 @@ public sealed partial class GalaxyMapModule
     public int LoadOrder { get; }
     public ModuleIdReservations Reservations { get; }
     public IReadOnlyDictionary<int, string> ClusterTextureLinks { get; }
+    public IReadOnlyList<PlanetTextureLink> PlanetTextureLinks { get; }
     public bool IsBaseGame { get; }
 
     public GalaxyMapModule With(
@@ -165,7 +197,8 @@ public sealed partial class GalaxyMapModule
         ModuleColor? color = null,
         int? loadOrder = null,
         ModuleIdReservations? reservations = null,
-        IReadOnlyDictionary<int, string>? clusterTextureLinks = null)
+        IReadOnlyDictionary<int, string>? clusterTextureLinks = null,
+        IReadOnlyList<PlanetTextureLink>? planetTextureLinks = null)
     {
         if (IsBaseGame)
         {
@@ -180,7 +213,8 @@ public sealed partial class GalaxyMapModule
             IsReadOnly,
             loadOrder ?? LoadOrder,
             reservations ?? Reservations,
-            clusterTextureLinks ?? ClusterTextureLinks);
+            clusterTextureLinks ?? ClusterTextureLinks,
+            planetTextureLinks ?? PlanetTextureLinks);
     }
 
     public override string ToString() => $"{Name} [{Tag}]";

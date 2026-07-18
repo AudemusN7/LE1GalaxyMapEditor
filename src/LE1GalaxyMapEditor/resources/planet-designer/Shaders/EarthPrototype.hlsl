@@ -3,7 +3,7 @@ cbuffer SceneConstants : register(b0)
     row_major float4x4 WorldViewProjection;
     row_major float4x4 World;
     float4 CameraPosition;
-    // x: ambient SkyLight, y: postprocessed, z: animation time, w: point lights
+    // x: ambient SkyLight, z: animation time, w: point lights
     float4 RenderOptions;
 };
 
@@ -142,7 +142,10 @@ float3 ApplyAtmosphere(float3 surface, PixelInput input)
 {
     float3 normal = normalize(input.Normal);
     float3 tangent = normalize(input.Tangent.xyz);
-    float3 bitangent = normalize(cross(normal, tangent)) * input.Tangent.w;
+    // Legendary Explorer's glTF tangent points along +U, while +V is
+    // cross(tangent, normal) for this mesh (the opposite of glTF's usual
+    // cross(normal, tangent) convention).
+    float3 bitangent = normalize(cross(tangent, normal)) * input.Tangent.w;
     float3 viewDirection = normalize(CameraPosition.xyz - input.WorldPosition);
     float2 viewOffset = float2(dot(viewDirection, tangent), dot(viewDirection, bitangent)) * -0.026;
 
@@ -176,7 +179,7 @@ float3 CalculateMaterialNormal(PixelInput input)
 
     float3 geometryNormal = normalize(input.Normal);
     float3 tangent = normalize(input.Tangent.xyz);
-    float3 bitangent = normalize(cross(geometryNormal, tangent)) * input.Tangent.w;
+    float3 bitangent = normalize(cross(tangent, geometryNormal)) * input.Tangent.w;
     return normalize(
         tangent * tangentNormal.x +
         bitangent * tangentNormal.y +
@@ -296,15 +299,7 @@ float4 PSMain(PixelInput input) : SV_TARGET
             PointLight2FalloffExponent);
     }
 
-    // A PNG needs display encoding regardless of whether the scene
-    // postprocess is enabled.
-    float3 mapped = pow(saturate(previewColor), 1.0 / 2.2);
-    if (RenderOptions.y > 0.5)
-    {
-        // The Earth reference pair shows a mild cooler/darker display grade,
-        // not the aggressive filmic curve used by the first prototype. This
-        // remains an approximation because LE1 exposure changes with the scene.
-        mapped *= float3(0.90, 0.90, 0.99);
-    }
-    return float4(mapped, 1);
+    // Keep the material output linear and HDR. Display encoding, colour grading,
+    // and bloom belong to the one full-screen scene postprocess pass.
+    return float4(max(previewColor, 0), 1);
 }

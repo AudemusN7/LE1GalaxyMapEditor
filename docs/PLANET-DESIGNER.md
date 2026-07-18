@@ -56,6 +56,12 @@ The controls are divided into nine groups:
 
 Hover over a control for its parameter description.
 
+### Link a module texture
+
+Choose **Link module texture...** below Identity to add a custom texture. Enter its full in-memory seek-free reference, select one or more menus where it should be available (**Continent**, **Normals**, **Ocean**, **City Emissive** or **Atmosphere**), then browse for the local preview image.
+
+The editor stages the image under the module's `textures` folder and records the relationship in `module.json`. The local filename is deliberately independent from the in-memory reference written to `GalaxyMap_Planet.csv`. Editing that reference later in the Planet 2DA table updates the metadata relationship without renaming or losing the staged image.
+
 ## Control types
 
 | Control | Use |
@@ -89,7 +95,7 @@ The preview uses a fixed camera that matches the in-game view. It does not pan, 
 
 ## Preview textures and rendering
 
-Bundled texture references render directly. An unknown custom texture reference is preserved in the data but displayed with a fallback texture in the preview. Support for custom planet textures may come in the future.
+Bundled texture references render directly. Linked module textures use their staged local image immediately, including before Commit. An unknown, unlinked custom texture reference is preserved in the data but displayed with a fallback texture in the preview.
 
 Check the **fallback textures** detail when the preview does not match your intended custom asset.
 

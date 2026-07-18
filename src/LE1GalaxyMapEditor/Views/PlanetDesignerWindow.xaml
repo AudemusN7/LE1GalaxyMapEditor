@@ -286,6 +286,7 @@
                         </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
+                                    <StackPanel>
                                     <Expander IsExpanded="{Binding ExpandedByDefault}" Margin="0,0,0,7" Foreground="{StaticResource TextBrush}">
                                         <Expander.Header>
                                             <StackPanel Margin="0,3,0,4" MaxWidth="390">
@@ -369,6 +370,12 @@
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
                                     </Expander>
+                                    <Button Content="Link module texture..."
+                                            Visibility="{Binding ShowLinkTextureButton, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                            HorizontalAlignment="Stretch" Margin="4,0,4,11" Padding="10,6"
+                                            Click="LinkModuleTexture_OnClick"
+                                            ToolTip="Stage a local preview image and expose its seek-free texture reference in selected material menus."/>
+                                    </StackPanel>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                     </ListBox>

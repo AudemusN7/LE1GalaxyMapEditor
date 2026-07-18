@@ -31,6 +31,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly WorkspaceWorkflowService _workspaceWorkflows;
     private readonly RelayWorkflow _relay;
     private readonly ClusterTextureWorkflow _clusterTextures;
+    private readonly PlanetTextureWorkflow _planetTextures;
     private readonly PlanetRelationshipWorkflow _planetRelationships;
     private readonly InspectorEditWorkflow _inspectorEdits;
     private readonly RowAuthoringWorkflow _rowAuthoring;
@@ -77,6 +78,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _relay = new RelayWorkflow(_session, _edits);
         _relay.StateChanged += RelayStateOnChanged;
         _clusterTextures = new ClusterTextureWorkflow(_session, _edits, _textures);
+        _planetTextures = new PlanetTextureWorkflow(_session, _edits, _textures);
         _planetRelationships = new PlanetRelationshipWorkflow(_session, _edits);
         _inspectorEdits = new InspectorEditWorkflow(_session, _edits);
         TableViewer = new TableViewerViewModel(
@@ -778,7 +780,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             RedoPlanetDesigner,
             () => _edits.CanUndo,
             () => _edits.CanRedo,
-            ResolvePlanetForDesigner);
+            ResolvePlanetForDesigner,
+            request => LinkPlanetTexture(designer, request),
+            ResolvePlanetPreviewTexture);
     }
 
     private Planet? ResolvePlanetForDesigner(GalaxyMapRowKey key, string? moduleTag)
@@ -899,6 +903,46 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             targetModule);
         ApplyMutationResult(result);
         return result;
+    }
+
+    private WorkflowResult LinkPlanetTexture(
+        PlanetDesignerSession designer,
+        PlanetTextureLinkRequest request)
+    {
+        var planet = ResolvePlanetForDesigner(designer.Key, designer.ModuleTag) ??
+                     ResolvePlanetForDesigner(designer.Key, null);
+        if (planet is null)
+        {
+            return WorkflowResult.Failure("The Planet row is no longer present in the workspace.", designer.Key);
+        }
+
+        var target = ResolveWritableTarget(planet, preferActiveModule: true);
+        if (target is null)
+        {
+            return WorkflowResult.Failure(
+                HasError ? ErrorMessage : "Planet texture link cancelled; no writable module was selected.",
+                designer.Key);
+        }
+
+        var result = _planetTextures.Stage(
+            planet,
+            target,
+            request,
+            CaptureHistoryPresentation(designer.Key));
+        if (result.Succeeded)
+        {
+            _navigation.PreferredInstanceTag = target.Tag;
+            RefreshWorkspace(designer.Key, CaptureView(), result.Message, refreshModules: true);
+        }
+        return result;
+    }
+
+    private LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource? ResolvePlanetPreviewTexture(string inMemoryPath)
+    {
+        var source = _planetTextures.ResolvePreview(inMemoryPath);
+        return source is null
+            ? null
+            : new LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource(source.CacheKey, source.Contents);
     }
 
     private bool UndoPlanetDesigner(GalaxyMapRowKey key)
@@ -1521,6 +1565,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return true;
     }
 
+    public bool StagePlanetTexture(
+        Planet planet,
+        GalaxyMapModule target,
+        PlanetTextureLinkRequest request)
+    {
+        var result = _planetTextures.Stage(
+            planet,
+            target,
+            request,
+            CaptureHistoryPresentation(planet.Key));
+        if (!result.Succeeded)
+        {
+            return Fail(result.Error ?? result.Message);
+        }
+
+        _navigation.PreferredInstanceTag = target.Tag;
+        RefreshWorkspace(planet.Key, CaptureView(), result.Message, refreshModules: true);
+        return true;
+    }
+
     private System.Windows.Media.ImageSource? GetClusterTexture(Cluster cluster)
     {
         var source = _clusterTextures.ResolveSource(cluster, Document);
@@ -1835,6 +1899,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return WorkflowResult.Failure(message, key);
         }
 
+        GalaxyMapModule? renamedTextureModule = null;
+        if (row is Planet planet && PlanetAppearanceSchema.Properties.Any(definition =>
+                definition.Editor == PlanetAppearanceEditorKind.Texture &&
+                definition.Columns.Contains(column, StringComparer.OrdinalIgnoreCase)))
+        {
+            var oldPath = PlanetAppearanceCodec.Decode(planet)[column];
+            renamedTextureModule = PlanetTextureWorkflow.CreateRenamedReference(
+                target,
+                oldPath,
+                token,
+                out var renameError);
+            if (renameError is not null)
+            {
+                return WorkflowResult.Failure(renameError, key);
+            }
+        }
+
         var view = CaptureView();
         _isApplyingTableCellEdit = true;
         try
@@ -1849,6 +1930,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             {
                 StatusMessage = result.Error ?? result.Message;
                 return result;
+            }
+
+            if (renamedTextureModule is not null && Workspace is { } workspace)
+            {
+                workspace.ReplaceModule(target, renamedTextureModule);
+                _edits.MarkMetadataDirty(renamedTextureModule);
             }
 
             _navigation.PreferredInstanceTag = target.Tag;

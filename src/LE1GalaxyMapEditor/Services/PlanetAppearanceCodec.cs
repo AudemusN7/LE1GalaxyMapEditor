@@ -100,6 +100,12 @@ public static class PlanetAppearanceCodec
             trimmed = trimmed[VanillaTexturePackagePrefix.Length..];
         }
 
+        var objectSeparator = trimmed.LastIndexOf('.');
+        if (objectSeparator >= 0 && objectSeparator < trimmed.Length - 1)
+        {
+            trimmed = trimmed[(objectSeparator + 1)..];
+        }
+
         return trimmed;
     }
 

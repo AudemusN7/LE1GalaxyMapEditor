@@ -45,21 +45,8 @@ float4 PSMain(PixelInput input) : SV_TARGET
 {
     float gradient = CoronaGradient.Sample(SurfaceSampler, input.UV).r;
     float fringe = FringeBloom * floor(gradient + 0.35);
+    // Stay linear/HDR. The corona is accumulated into the same scene target as
+    // the planet and stars before the single full-screen postprocess pass.
     float3 linearCorona = max((gradient * CoronaColor + fringe) * Opacity, 0);
-
-    // The recovered material output is linear/HDR, while this prototype writes
-    // directly to an ordinary display PNG. This compact transfer matches the
-    // supplied no-postprocess capture without changing the material formula.
-    float3 displayCorona = pow(saturate(linearCorona * 0.64), 1.0 / 1.4);
-
-    // Approximate the small, desaturating bloom visible in the game's
-    // postprocessed capture. A full-screen HDR bloom pass can replace this if
-    // the editor eventually needs exact scene postprocessing.
-    if (RenderOptions.y > 0.5)
-    {
-        float bloom = displayCorona.b * 0.1;
-        displayCorona = saturate(displayCorona + bloom.xxx);
-    }
-
-    return float4(displayCorona, 0);
+    return float4(linearCorona * 0.64, 0);
 }

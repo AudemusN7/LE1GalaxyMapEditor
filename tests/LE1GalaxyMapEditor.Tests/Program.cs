@@ -1263,7 +1263,15 @@ internal static class Program
                     new RowIdRange(100, 109),
                     new RowIdRange(8000, 8099),
                     new RowIdRange(500, 599),
-                    new RowIdRange(50, 79)));
+                    new RowIdRange(50, 79)),
+                planetTextureLinks:
+                [
+                    new PlanetTextureLink(
+                        "stable-texture-id",
+                        "BIOA_TEST_EXPANSION_T.CustomPlanet01",
+                        "textures/Planet_stable-texture-id_preview.png",
+                        PlanetTextureCategory.Continent | PlanetTextureCategory.Atmosphere)
+                ]);
             var store = new GalaxyMapModuleManifestStore();
             store.Save(module);
             var loaded = store.Load(folder);
@@ -1273,6 +1281,24 @@ internal static class Program
             Equal(module.Color, loaded.Color, "manifest colour");
             Equal(module.LoadOrder, loaded.LoadOrder, "manifest load order");
             Equal(module.Reservations.Planet!.Value, loaded.Reservations.Planet!.Value, "manifest Planet range");
+            var planetTexture = loaded.PlanetTextureLinks.Single();
+            Equal("stable-texture-id", planetTexture.Id, "manifest preserves stable Planet texture identity");
+            Equal("BIOA_TEST_EXPANSION_T.CustomPlanet01", planetTexture.InMemoryPath,
+                "manifest preserves Planet texture in-memory path");
+            Equal("textures/Planet_stable-texture-id_preview.png", planetTexture.RelativePath,
+                "manifest preserves independent local Planet texture path");
+            Equal(PlanetTextureCategory.Continent | PlanetTextureCategory.Atmosphere, planetTexture.Categories,
+                "manifest preserves Planet texture menu categories");
+            var renamed = PlanetTextureWorkflow.CreateRenamedReference(
+                loaded,
+                planetTexture.InMemoryPath,
+                "BIOA_TEST_EXPANSION_T.RenamedPlanet01",
+                out var renameError);
+            True(renameError is null && renamed is not null, "2DA Planet texture references can be renamed");
+            Equal(planetTexture.Id, renamed!.PlanetTextureLinks.Single().Id,
+                "renaming a Planet texture reference keeps its stable identity");
+            Equal(planetTexture.RelativePath, renamed.PlanetTextureLinks.Single().RelativePath,
+                "renaming a Planet texture reference keeps its staged local file");
             True(!loaded.IsReadOnly, "authoring manifest remains writable");
             True(File.Exists(Path.Combine(folder, GalaxyMapModuleManifestStore.FileName)), "manifest file exists");
         });
@@ -2565,6 +2591,70 @@ internal static class Program
                 reloaded.ClusterTextureLinks[cluster.RowId], "manifest stores Cluster texture link");
             NotNull(new GalaxyMapTextureService(FindTextureDirectory()).GetModuleClusterTexture(reloaded, cluster.RowId),
                 "committed module texture resolves independently of a Cluster row override");
+
+            const string customPlanetPath = "BIOA_TEXTURE_MODULE_T.CustomPlanet01";
+            const string customPlanetName = "CustomPlanet01";
+            var materialPlanet = viewModel.Document.Planets.First(PlanetAppearanceCodec.IsAppearanceCapable);
+            var designer = viewModel.CreatePlanetDesigner(materialPlanet.Key);
+            var originalTextureValues = designer.Groups.SelectMany(group => group.Fields)
+                .Where(field => field.IsTexture)
+                .ToDictionary(field => field.Definition.Id, field => field.Primary.Value);
+            True(designer.LinkModuleTexture(
+                    new PlanetTextureLinkRequest(
+                        customPlanetPath,
+                        sourceTexture,
+                        PlanetTextureCategory.Continent | PlanetTextureCategory.Normals)),
+                "Planet texture is staged with selected material categories");
+            foreach (var field in designer.Groups.SelectMany(group => group.Fields).Where(field => field.IsTexture))
+            {
+                Equal(originalTextureValues[field.Definition.Id], field.Primary.Value,
+                    $"linking a Planet texture preserves {field.Definition.Id}");
+            }
+            var stagedPlanetLink = viewModel.ActiveModule!.PlanetTextureLinks.Single();
+            var stagedPlanetPath = Path.Combine(
+                viewModel.ActiveModule.FolderPath!,
+                stagedPlanetLink.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            True(!File.Exists(stagedPlanetPath), "Planet preview image waits for Commit");
+
+            True(designer.Groups.Single(group => group.Name == "Continent / Landmass").Fields
+                    .Where(field => field.IsTexture)
+                    .All(field => field.TextureOptions.Contains(customPlanetName)),
+                "Continent category exposes the linked Planet texture by object name");
+            True(designer.Groups.Single(group => group.Name == "Normals").Fields
+                    .Where(field => field.IsTexture)
+                    .All(field => field.TextureOptions.Contains(customPlanetName)),
+                "Normals category exposes the linked Planet texture by object name");
+            True(designer.Groups.Single(group => group.Name == "Ocean").Fields
+                    .Where(field => field.IsTexture)
+                    .All(field => !field.TextureOptions.Contains(customPlanetName)),
+                "unselected Ocean category hides the linked Planet texture");
+
+            designer.Groups.SelectMany(group => group.Fields)
+                .Single(field => field.Definition.Id == "ContinentMask01").Primary.Value = customPlanetName;
+            True(designer.TryApply(), "linked Planet texture reference applies to the Planet 2DA draft");
+            Equal(customPlanetPath,
+                viewModel.Document!.PlanetsByRowId[materialPlanet.RowId].ExtraFields["ContinentMask01"],
+                "selecting a Planet texture object name writes its full in-memory path");
+
+            const string renamedPlanetPath = "BIOA_TEXTURE_MODULE_T.RenamedPlanet01";
+            viewModel.TableViewer.SelectedTable = GalaxyMapTable.Planet;
+            viewModel.TableViewer.RefreshIfNeeded(force: true);
+            var continentColumn = viewModel.TableViewer.Columns.ToList().FindIndex(column =>
+                column.Name.Equals("ContinentMask01", StringComparison.OrdinalIgnoreCase));
+            var planetTableRow = viewModel.TableViewer.Rows.Single(row => row.Key == materialPlanet.Key);
+            True(viewModel.TableViewer.CommitCellEdit(planetTableRow, continentColumn, renamedPlanetPath).Succeeded,
+                "2DA table can rename a linked Planet texture reference");
+            var renamedPlanetLink = viewModel.ActiveModule!.PlanetTextureLinks.Single();
+            Equal(renamedPlanetPath, renamedPlanetLink.InMemoryPath,
+                "2DA rename updates the linked Planet texture reference");
+            Equal(stagedPlanetLink.RelativePath, renamedPlanetLink.RelativePath,
+                "2DA rename keeps the linked local Planet image path");
+
+            True(viewModel.CommitPendingChanges(), "Planet texture metadata commit succeeds");
+            True(File.Exists(stagedPlanetPath), "Planet preview image is copied into the module on Commit");
+            var reloadedPlanetModule = new GalaxyMapModuleManifestStore().Load(viewModel.ActiveModule.FolderPath!);
+            Equal(renamedPlanetPath, reloadedPlanetModule.PlanetTextureLinks.Single().InMemoryPath,
+                "renamed Planet texture relationship survives manifest reload");
         });
     }
 
