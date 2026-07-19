@@ -3,7 +3,7 @@
 LE1 Galaxy Map Editor is a Windows tool for creating and editing Mass Effect 1 galaxy-map modules (LE1 primarily, but technically functional for OT1 as well).
 It combines a visual map editor, a merged 2DA table view and a highly accurate Planet Designer in one workspace.
 
-[IMAGE: LE1 Galaxy Map Editor showing the Hierarchy, Galaxy view, Properties and module bar]
+![Main Galaxy Map Editor with the Hierarchy, map, Properties pane, breadcrumbs and module bar](images/main-window.png)
 
 ## Core features
 
