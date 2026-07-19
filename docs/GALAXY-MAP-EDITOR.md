@@ -2,7 +2,7 @@
 
 The Galaxy Map Editor is the main visual workspace. It keeps the **HIERARCHY**, **MAP CANVAS** and **PROPERTIES** panes synchronised as you navigate.
 
-[IMAGE: Main Galaxy Map Editor with the Hierarchy, map, Properties pane, breadcrumbs and module bar labelled]
+![Main Galaxy Map Editor with the Hierarchy, map, Properties pane, breadcrumbs and module bar](docs/images/main-window.png)
 
 ## Navigate the map
 
@@ -31,7 +31,7 @@ This will also add a cursor widget that displays the X/Y coordinates of your cur
 
 The setting remains active as you move between map levels. Choose **Hide coordinate grid** to remove it. The cursor widget can also be independantly enabled by holding `Shift`.
 
-[IMAGE: Coordinate grid displayed over a System map with labelled major coordinates]
+![Coordinate grid displayed over a System map with live mouse coordinate position]](docs/images/coordinate-grid.png)
 
 ## Add content
 
@@ -46,6 +46,16 @@ You need an active writable module before adding content.
 The command is available from the contextual button at the top of the heirarchy, or right clicking on the appropriate hierarchy row/map canvas.
 
 New map objects start at the centre of the map rather than at the context-menu pointer. Move them afterwards with `Shift + Drag`.
+
+### Choose a Cluster label
+
+**Add Cluster** asks for a global `ClusterNN` label before creating the row. Vanilla reserves `Cluster01` through `Cluster21`, so new modules must use an unused label from `Cluster22` through `Cluster99`. 
+
+The window lists labels belonging to currently mounted modules and rejects a mounted collision.
+
+Cluster labels are shared across the entire galaxy map and the editor cannot detect conflicts with mods that are not currently mounted, so mod authors should publish and coordinate their claimed Cluster ranges. 
+
+Systems and Planets remain automatically numbered because their labels are scoped to their parent Cluster or System and aren't as big of a concern unless two mods edit the same cluster.
 
 ### Add a planet or system object
 
@@ -63,7 +73,7 @@ Landable planet templates can also create linked Map and PlotPlanet data, a Remo
 
 Generic and ringed planets can open in Planet Designer after creation. The planet will appear as black until an appearance has been applied to it.
 
-[IMAGE: Add system object window showing the five templates and landable-planet options]
+![Add system object window showing the five templates and landable-planet options](docs/images/add-system-object.png)
 
 ## Move a map marker
 
@@ -72,8 +82,6 @@ Hold **Shift**, then left-drag the marker. Live coordinates appear while you mov
 Release the mouse or Shift to apply the movement as one undoable change. Press **Esc** before releasing to cancel it. **Undo** can also revert the change if needed.
 
 Coordinates are kept between `0.00` and `1.00` and stored to two decimal places. Moving a BASEGAME object creates an override in a writable module.
-
-[IMAGE: Planet marker being Shift-dragged with live X and Y coordinates visible]
 
 ## Edit properties
 
@@ -132,7 +140,9 @@ Inherited Relays cannot be broken because the partial table format has no verifi
 
 Example: Spectre Expansion Mod adds the Arcturus Stream cluster, so it redirects the BASEGAME relay connection from  `Local Cluster <--> Exodus Cluster` to `Local Cluster <--> Arcturus Stream` and then adds a new relay connection from `Arcturus Stream <--> Exodus Cluster`,
 
-[IMAGE: Galaxy view in Relay destination-selection mode with the instruction banner and red Relay lines]
+![Main Galaxy view in Relay destination-selection mode with the instruction banner and red line](docs/images/relay-connection-a.png)
+
+![Created new relay connection from Serpent Nebula to Pangaea Expanse](docs/images/relay-connection-b.png)
 
 ## Link a Cluster texture
 

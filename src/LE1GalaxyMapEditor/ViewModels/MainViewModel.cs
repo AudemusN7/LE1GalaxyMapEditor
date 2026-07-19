@@ -62,13 +62,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IEditorDialogs? dialogs = null,
         IDeferredScheduler? deferredScheduler = null,
         Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null,
-        Func<CommitPreview, bool>? commitReviewAction = null)
+        Func<CommitPreview, bool>? commitReviewAction = null,
+        Func<ClusterLabelRequest, string?>? clusterLabelSelector = null)
     {
         _loader = loader;
         _textures = textures ?? new GalaxyMapTextureService();
         _workspaceStore = workspaceStore ?? new GalaxyMapWorkspaceStore();
         _dialogs = dialogs ?? new WpfEditorDialogs(
-            editTargetSelector, confirmAction, shaderNameSelector, commitReviewAction);
+            editTargetSelector, confirmAction, shaderNameSelector, commitReviewAction, clusterLabelSelector);
         _commitPreviewBuilder = new CommitPreviewBuilder(_manifestStore);
         _validation = new ValidationCoordinator(deferredScheduler ?? new DispatcherDeferredScheduler());
         _validation.Completed += ValidationOnCompleted;
@@ -634,7 +635,63 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     private void AddCluster()
-        => ApplyMutationResult(_rowAuthoring.CreateCluster(CaptureHistoryPresentation()));
+    {
+        if (Workspace is null)
+        {
+            return;
+        }
+
+        string suggestedLabel;
+        try
+        {
+            suggestedLabel = _rowAuthoring.GetSuggestedClusterLabel();
+        }
+        catch (Exception exception) when (IsExpectedOperationFailure(exception))
+        {
+            Fail(exception.Message);
+            return;
+        }
+
+        string? ValidateLabel(string candidate)
+        {
+            candidate = candidate.Trim();
+            if (!InspectorEditWorkflow.TryLabelSuffix(candidate, "Cluster", out var suffix) ||
+                suffix is < GalaxyMapIdentityLimits.MinAuthoredClusterLabel or > GalaxyMapIdentityLimits.MaxClusterLabel ||
+                !string.Equals(candidate, $"Cluster{suffix:D2}", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Use the exact form ClusterNN, from Cluster22 to Cluster99.";
+            }
+
+            var conflict = Workspace.Layers
+                .SelectMany(layer => layer.Clusters.Select(cluster => (layer.Module, Cluster: cluster)))
+                .FirstOrDefault(item =>
+                    InspectorEditWorkflow.TryLabelSuffix(item.Cluster.Label, "Cluster", out var existing) &&
+                    existing == suffix);
+            return conflict.Cluster is null
+                ? null
+                : $"Cluster{suffix:D2} is already used by {conflict.Module.Name} [{conflict.Module.Tag}].";
+        }
+
+        var mountedLabels = Workspace.Layers
+            .SelectMany(layer => layer.Clusters.Select(cluster => $"{cluster.Label} — {layer.Module.Tag}"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(label => label, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var request = new ClusterLabelRequest(suggestedLabel, mountedLabels, ValidateLabel);
+        var label = _dialogs.ChooseClusterLabel(request);
+        if (label is null)
+        {
+            StatusMessage = "Cluster creation cancelled.";
+            return;
+        }
+        if (ValidateLabel(label) is { } error)
+        {
+            Fail(error);
+            return;
+        }
+
+        ApplyMutationResult(_rowAuthoring.CreateCluster(label.Trim(), CaptureHistoryPresentation()));
+    }
 
     private bool CanAddForCurrentView() => HasActiveModule && CurrentViewModel switch
     {
@@ -1182,7 +1239,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         var selectionKey = _navigation.SelectedKey;
         var view = CaptureView();
-        var result = _edits.Commit(_workspaceWorkflows.RememberCurrentWorkspace);
+        var result = _edits.Commit(_workspaceWorkflows.CommitCurrentWorkspace);
         if (!result.Succeeded)
         {
             if (result.Impact is not null && Workspace is not null)

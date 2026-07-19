@@ -98,7 +98,7 @@ public sealed class MainInspectorPresentationWorkflow(
             InspectorOptionSet.Maps => MapOptions(),
             InspectorOptionSet.RelayClusters => session.Document?.Clusters
                 .Select(cluster => (Cluster: cluster, Valid: TryLabelSuffix(cluster.Label, "Cluster", out var suffix), Suffix: suffix))
-                .Where(item => item.Valid && item.Suffix > 0 && item.Suffix <= int.MaxValue / 10_000)
+                .Where(item => item.Valid && item.Suffix is > 0 and <= GalaxyMapIdentityLimits.MaxClusterLabel)
                 .OrderBy(item => item.Cluster.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .Select(item => new InspectorFieldOption(
                     (item.Suffix * 10_000).ToString(CultureInfo.InvariantCulture),

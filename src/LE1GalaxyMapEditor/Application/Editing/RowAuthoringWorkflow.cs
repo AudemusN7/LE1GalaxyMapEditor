@@ -47,10 +47,18 @@ public sealed class RowAuthoringWorkflow(
         return new CloneDefaults(suggestedId, NextLabel(prefix, labels));
     }
 
-    public WorkflowResult CreateCluster(HistoryPresentationState presentation)
+    public string GetSuggestedClusterLabel()
+    {
+        var workspace = session.Workspace ?? throw new InvalidOperationException("A workspace is required.");
+        return NextLabel(
+            "Cluster",
+            workspace.Layers.SelectMany(layer => layer.Clusters).Select(cluster => cluster.Label));
+    }
+
+    public WorkflowResult CreateCluster(string label, HistoryPresentationState presentation)
         => CreateFactoryRow(
             GalaxyMapTable.Cluster,
-            factory => factory.CreateCluster(),
+            factory => factory.CreateCluster(label: label),
             rowId => new NavigationTarget(rowId, null),
             "Created a new Cluster in the active module.",
             presentation);
@@ -121,10 +129,10 @@ public sealed class RowAuthoringWorkflow(
                     planet.MapRowId = linkedMapId;
                     planet.Event = linkedDestination.Event;
                     planet.ButtonLabel = linkedDestination.ButtonLabel;
-                    DirtyColumns(planet, "Map", "Event", "ButtonLabel");
+                    GalaxyMapRowAuthoring.MarkDirty(planet, "Map", "Event", "ButtonLabel");
                     if (linkedDestination.AddPlotPlanet)
                     {
-                        layer.Upsert(CreatePlotPlanetRow(layer, planet));
+                        layer.Upsert(GalaxyMapRowAuthoring.CreatePlotPlanetRow(layer, planet));
                     }
                 },
                 presentation with
@@ -159,6 +167,27 @@ public sealed class RowAuthoringWorkflow(
             if (string.IsNullOrWhiteSpace(request.Label) || string.IsNullOrWhiteSpace(request.NameText))
             {
                 throw new InvalidOperationException("A unique label and display name are required.");
+            }
+            ValidateLabel(source, request.Label);
+            if (request.CloneChildren && source is Cluster sourceWithSystems)
+            {
+                if (sourceWithSystems.Systems.Count > GalaxyMapIdentityLimits.MaxSystemLabel)
+                {
+                    throw new InvalidOperationException(
+                        "This Cluster cannot be cloned with children because the game supports only System01-System09 per Cluster.");
+                }
+                if (sourceWithSystems.Systems.Any(system =>
+                        system.Planets.Count > GalaxyMapIdentityLimits.MaxPlanetLabel))
+                {
+                    throw new InvalidOperationException(
+                        "This Cluster cannot be cloned with children because the game supports only Planet01-Planet99 per System.");
+                }
+            }
+            if (request.CloneChildren && source is GalaxySystem sourceWithPlanets &&
+                sourceWithPlanets.Planets.Count > GalaxyMapIdentityLimits.MaxPlanetLabel)
+            {
+                throw new InvalidOperationException(
+                    "This System cannot be cloned with children because the game supports only Planet01-Planet99 per System.");
             }
 
             var duplicateLabel = source switch
@@ -359,7 +388,9 @@ public sealed class RowAuthoringWorkflow(
                         cluster.Systems.Where(candidate => candidate.RowId != system.RowId)
                             .Select(candidate => candidate.Label));
                     if (!TryLabelSuffix(cluster.Label, "Cluster", out var clusterNumber) || clusterNumber <= 0 ||
-                        !TryLabelSuffix(label, "System", out var systemNumber) || systemNumber is <= 0 or > 99 ||
+                        clusterNumber > GalaxyMapIdentityLimits.MaxClusterLabel ||
+                        !TryLabelSuffix(label, "System", out var systemNumber) ||
+                        systemNumber is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
                         system.Planets.Any(planet => !TryCalculateActiveWorld(
                             cluster.Label,
                             label,
@@ -442,7 +473,7 @@ public sealed class RowAuthoringWorkflow(
             ? GalaxyMapRowCloner.Clone(physical)
             : GalaxyMapRowCloner.CloneForOverride(row, layer.Module);
         SetCoordinates(replacement, x, y);
-        DirtyColumns(replacement, "X", "Y");
+        GalaxyMapRowAuthoring.MarkDirty(replacement, "X", "Y");
         return edits.ExecuteMutation(new EditMutationRequest(
             [replacement.Key],
             [replacement.Table],
@@ -621,39 +652,6 @@ public sealed class RowAuthoringWorkflow(
         }
     }
 
-    private static PlotPlanetEntry CreatePlotPlanetRow(GalaxyMapLayer layer, Planet planet)
-    {
-        var plot = new PlotPlanetEntry
-        {
-            RowId = planet.RowId,
-            Code = planet.ActiveWorld,
-            Name = planet.Name,
-            NameText = planet.NameText
-        };
-        GalaxyMapRowAuthoring.PrepareNewRow(layer, plot);
-        foreach (var column in new[]
-                 {
-                     "VisibleConditional", "VisibleFunction", "VisibleParameter",
-                     "UsableConditional", "UsableFunction", "UsableParameter"
-                 })
-        {
-            if (planet.ExtraFields.TryGetValue(column, out var value))
-            {
-                plot.SetExtraField(column, value);
-            }
-        }
-        return plot;
-    }
-
-    private static void DirtyColumns(GalaxyMapRow row, params string[] columns)
-    {
-        var snapshot = GalaxyMapRowAuthoring.EnsureSnapshot(row);
-        foreach (var column in columns)
-        {
-            snapshot.MarkDirty(column);
-        }
-    }
-
     private static void ValidateNewId(
         GalaxyMapTable table,
         int rowId,
@@ -695,30 +693,53 @@ public sealed class RowAuthoringWorkflow(
         }
     }
 
+    private static void ValidateLabel(GalaxyMapRow row, string label)
+    {
+        var (prefix, maximum) = row switch
+        {
+            Cluster => ("Cluster", GalaxyMapIdentityLimits.MaxClusterLabel),
+            GalaxySystem => ("System", GalaxyMapIdentityLimits.MaxSystemLabel),
+            Planet => ("Planet", GalaxyMapIdentityLimits.MaxPlanetLabel),
+            _ => throw new InvalidOperationException($"{row.Table} rows do not use a numbered galaxy-map label.")
+        };
+        var minimum = row is Cluster ? GalaxyMapIdentityLimits.MinAuthoredClusterLabel : 1;
+        if (!TryLabelSuffix(label, prefix, out var suffix) || suffix < minimum || suffix > maximum)
+        {
+            throw new InvalidOperationException(
+                $"Use a {prefix} label from {prefix}{minimum:D2} to {prefix}{maximum:D2}.");
+        }
+    }
+
     private static string NextLabel(string prefix, IEnumerable<string> labels)
     {
-        var max = labels.Select(label => label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
-                                         int.TryParse(label[prefix.Length..], out var number)
-                ? number
-                : 0)
-            .DefaultIfEmpty()
-            .Max();
-        return $"{prefix}{max + 1:D2}";
+        var maximum = GalaxyMapIdentityLimits.MaxLabel(prefix);
+        var minimum = string.Equals(prefix, "Cluster", StringComparison.OrdinalIgnoreCase)
+            ? GalaxyMapIdentityLimits.MinAuthoredClusterLabel
+            : 1;
+        var used = labels
+            .Select(label => TryLabelSuffix(label, prefix, out var suffix) ? suffix : 0)
+            .Where(suffix => suffix is > 0 && suffix <= maximum)
+            .ToHashSet();
+        for (var suffix = minimum; suffix <= maximum; suffix++)
+        {
+            if (!used.Contains(suffix))
+            {
+                return $"{prefix}{suffix:D2}";
+            }
+        }
+        throw new InvalidOperationException(
+            $"No {prefix} label is available in the supported {prefix}{minimum:D2}-{prefix}{maximum:D2} range.");
     }
 
     private static int DeriveActiveWorld(string? cluster, string? system, string planet)
     {
-        static int Suffix(string? value)
+        if (TryCalculateActiveWorld(cluster ?? string.Empty, system ?? string.Empty, planet, out var activeWorld))
         {
-            var digits = new string((value ?? string.Empty).Reverse().TakeWhile(char.IsDigit).Reverse().ToArray());
-            return int.TryParse(digits, out var number) ? number : 0;
+            return activeWorld;
         }
-        return checked(Suffix(cluster) * 10_000 + Suffix(system) * 100 + Suffix(planet));
+        throw new InvalidOperationException(
+            "The Cluster/System/Planet label chain is outside the game's supported ActiveWorld range.");
     }
-
-    private static bool IsEffectiveRowOwnedBy(GalaxyMapLayer layer, GalaxyMapRow row)
-        => layer.Find(row.Key) is not null &&
-           string.Equals(row.Origin?.ModuleTag, layer.Module.Tag, StringComparison.OrdinalIgnoreCase);
 
     private static string MoveSummary(string item, string destination, string oldLabel, string newLabel)
         => string.Equals(oldLabel, newLabel, StringComparison.OrdinalIgnoreCase)
@@ -727,24 +748,26 @@ public sealed class RowAuthoringWorkflow(
 
     private static string AvailableScopedLabel(string prefix, string preferred, IEnumerable<string> existingLabels)
         => FindAvailableScopedLabel(prefix, preferred, existingLabels) ??
-           throw new InvalidOperationException($"The destination already uses all 99 available {prefix} labels.");
+           throw new InvalidOperationException(
+               $"The destination already uses all {GalaxyMapIdentityLimits.MaxLabel(prefix)} available {prefix} labels.");
 
     private static string? FindAvailableScopedLabel(
         string prefix,
         string preferred,
         IEnumerable<string> existingLabels)
     {
+        var maximum = GalaxyMapIdentityLimits.MaxLabel(prefix);
         var used = existingLabels
             .Select(label => TryLabelSuffix(label, prefix, out var suffix) ? suffix : 0)
-            .Where(suffix => suffix is > 0 and <= 99)
+            .Where(suffix => suffix is > 0 && suffix <= maximum)
             .ToHashSet();
         if (TryLabelSuffix(preferred, prefix, out var preferredSuffix) &&
-            preferredSuffix is > 0 and <= 99 && !used.Contains(preferredSuffix))
+            preferredSuffix > 0 && preferredSuffix <= maximum && !used.Contains(preferredSuffix))
         {
             return preferred;
         }
 
-        for (var suffix = 1; suffix <= 99; suffix++)
+        for (var suffix = 1; suffix <= maximum; suffix++)
         {
             if (!used.Contains(suffix))
             {
@@ -761,9 +784,12 @@ public sealed class RowAuthoringWorkflow(
         out int activeWorld)
     {
         activeWorld = 0;
-        if (!TryLabelSuffix(clusterLabel, "Cluster", out var clusterNumber) || clusterNumber <= 0 ||
-            !TryLabelSuffix(systemLabel, "System", out var systemNumber) || systemNumber is <= 0 or > 99 ||
-            !TryLabelSuffix(planetLabel, "Planet", out var planetNumber) || planetNumber is <= 0 or > 99)
+        if (!TryLabelSuffix(clusterLabel, "Cluster", out var clusterNumber) ||
+            clusterNumber is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel ||
+            !TryLabelSuffix(systemLabel, "System", out var systemNumber) ||
+            systemNumber is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
+            !TryLabelSuffix(planetLabel, "Planet", out var planetNumber) ||
+            planetNumber is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel)
         {
             return false;
         }
@@ -771,7 +797,7 @@ public sealed class RowAuthoringWorkflow(
         try
         {
             activeWorld = checked(clusterNumber * 10_000 + systemNumber * 100 + planetNumber);
-            return true;
+            return activeWorld <= GalaxyMapIdentityLimits.MaxActiveWorld;
         }
         catch (OverflowException)
         {

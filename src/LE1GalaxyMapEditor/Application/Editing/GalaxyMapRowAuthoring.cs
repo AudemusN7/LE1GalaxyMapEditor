@@ -6,6 +6,25 @@ namespace LE1GalaxyMapEditor.Workflows.Editing;
 
 public static class GalaxyMapRowAuthoring
 {
+    private static readonly IReadOnlyDictionary<GalaxyMapTable, IReadOnlySet<string>> KnownColumnsByTable =
+        new Dictionary<GalaxyMapTable, IReadOnlySet<string>>
+        {
+            [GalaxyMapTable.Cluster] = Fields("Label", "X", "Y", "Name", "NameText", "SphereSize", "Background"),
+            [GalaxyMapTable.System] = Fields("Label", "Cluster", "X", "Y", "Name", "NameText", "Scale", "ShowNebula"),
+            [GalaxyMapTable.Planet] = Fields("Label", "System", "X", "Y", "Name", "NameText", "ActiveWorld",
+                "Description", "ButtonLabel", "Map", "Scale", "RingColor", "OrbitRing", "SystemLevelType",
+                "PlanetLevelType", "Event", "ImageIndex"),
+            [GalaxyMapTable.PlotPlanet] = Fields("Code", "Name", "NameText"),
+            [GalaxyMapTable.Map] = Fields("Map", "StartPoint"),
+            [GalaxyMapTable.Relay] = Fields("StartCluster", "EndCluster")
+        };
+
+    private static readonly string[] PlotPlanetAvailabilityColumns =
+    [
+        "VisibleConditional", "VisibleFunction", "VisibleParameter",
+        "UsableConditional", "UsableFunction", "UsableParameter"
+    ];
+
     public static void PrepareNewRow(GalaxyMapLayer layer, GalaxyMapRow row)
     {
         var schema = CsvGalaxyMapLoader.GetCanonicalSchema(row.Table);
@@ -40,18 +59,39 @@ public static class GalaxyMapRowAuthoring
         => row.CsvSnapshot ?? throw new InvalidOperationException(
             $"{row.Table} row {row.RowId} has no source snapshot and cannot be written safely.");
 
-    private static IReadOnlySet<string> KnownColumns(GalaxyMapTable table) => table switch
+    public static void MarkDirty(GalaxyMapRow row, params string[] columns)
     {
-        GalaxyMapTable.Cluster => Fields("Label", "X", "Y", "Name", "NameText", "SphereSize", "Background"),
-        GalaxyMapTable.System => Fields("Label", "Cluster", "X", "Y", "Name", "NameText", "Scale", "ShowNebula"),
-        GalaxyMapTable.Planet => Fields("Label", "System", "X", "Y", "Name", "NameText", "ActiveWorld",
-            "Description", "ButtonLabel", "Map", "Scale", "RingColor", "OrbitRing", "SystemLevelType",
-            "PlanetLevelType", "Event", "ImageIndex"),
-        GalaxyMapTable.PlotPlanet => Fields("Code", "Name", "NameText"),
-        GalaxyMapTable.Map => Fields("Map", "StartPoint"),
-        GalaxyMapTable.Relay => Fields("StartCluster", "EndCluster"),
-        _ => throw new ArgumentOutOfRangeException(nameof(table), table, null)
-    };
+        var snapshot = EnsureSnapshot(row);
+        foreach (var column in columns)
+        {
+            snapshot.MarkDirty(column);
+        }
+    }
+
+    public static PlotPlanetEntry CreatePlotPlanetRow(GalaxyMapLayer layer, Planet planet)
+    {
+        var plot = new PlotPlanetEntry
+        {
+            RowId = planet.RowId,
+            Code = planet.ActiveWorld,
+            Name = planet.Name,
+            NameText = planet.NameText
+        };
+        PrepareNewRow(layer, plot);
+        foreach (var column in PlotPlanetAvailabilityColumns)
+        {
+            if (planet.ExtraFields.TryGetValue(column, out var value))
+            {
+                plot.SetExtraField(column, value);
+            }
+        }
+
+        return plot;
+    }
+
+    private static IReadOnlySet<string> KnownColumns(GalaxyMapTable table)
+        => KnownColumnsByTable.GetValueOrDefault(table)
+           ?? throw new ArgumentOutOfRangeException(nameof(table), table, null);
 
     private static HashSet<string> Fields(params string[] fields)
         => new(fields, StringComparer.OrdinalIgnoreCase);

@@ -42,7 +42,7 @@ public sealed partial class GalaxyMapDocument
             return false;
         }
 
-        if (suffix > int.MaxValue / 10_000)
+        if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
         {
             error = $"Cluster label '{cluster.Label}' is too large to encode as a Relay endpoint.";
             return false;
@@ -164,7 +164,7 @@ public sealed partial class GalaxyMapDocument
                 continue;
             }
 
-            if (suffix > int.MaxValue / 10_000)
+            if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
             {
                 Warnings.Add($"Cluster row {cluster.RowId} label '{cluster.Label}' is too large to encode as a Relay endpoint.");
                 continue;

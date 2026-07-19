@@ -126,6 +126,22 @@ public sealed class CommitPreviewBuilder(
             changeCount += entries.Length;
         }
 
+        var workspaceChanges = session.Changes.WorkspaceModuleChanges
+            .OrderBy(change => change.ModuleTag, StringComparer.OrdinalIgnoreCase)
+            .Select(change => new CommitPreviewEntry(
+                $"{change.ModuleName} [{change.ModuleTag}]",
+                [change.Kind == WorkspaceModuleChangeKind.Add
+                    ? "This module will be added to the remembered workspace."
+                    : "This module will be removed from the remembered workspace."],
+                change.Kind == WorkspaceModuleChangeKind.Add ? "ADD" : "REMOVE"))
+            .ToArray();
+        if (workspaceChanges.Length > 0)
+        {
+            sections.Add(new CommitPreviewSection("Workspace", GalaxyMapWorkspaceStore.FileName, workspaceChanges));
+            files.Add(("Workspace", GalaxyMapWorkspaceStore.FileName));
+            changeCount += workspaceChanges.Length;
+        }
+
         var summary = $"Across {files.Count} {Plural(files.Count, "file", "files")}, " +
                       $"{changeCount} staged {Plural(changeCount, "change", "changes")}.";
         return new CommitPreview(summary, changeCount, files.Count, sections);

@@ -34,15 +34,13 @@ Only a Relay owned solely by the active writable module can be broken. An BASEGA
 
 ## Planet Designer
 
-The preview is a highly accurate, but not 100% perfect representative of LE1's rendered planet appearance.
+The preview is a highly accurate, but not 100% perfect representative of LE1's rendered planet appearance. There are very minor differences in terms of postprocessing, HDR implementation, corona etc. Treat it as an accurate approximation, but not gospel.
 
 - The camera is fixed to the in-game planet view; there is no pan, rotation or zoom.
 - Only bundled vanilla textures can be displayed directly.
 - Unknown custom texture references are preserved but shown with fallback textures.
 - If both hardware and software rendering fail, material parameters remain editable without a preview.
 - Copy/Paste Appearance uses an internal application clipboard rather than the Windows clipboard.
-
-[IMAGE: Planet Designer preview with the fallback textures detail expanded]
 
 ## Module priority and ID collisions
 

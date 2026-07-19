@@ -33,10 +33,24 @@ public sealed class ValidationCoordinator(
                 ? _validator.Validate(document)
                 : [];
         var combined = startupDiagnostics.Concat(diagnostics).ToArray();
+        var errorCount = 0;
+        var warningCount = 0;
+        foreach (var diagnostic in combined)
+        {
+            if (diagnostic.Severity == ValidationSeverity.Error)
+            {
+                errorCount++;
+            }
+            else if (diagnostic.Severity == ValidationSeverity.Warning)
+            {
+                warningCount++;
+            }
+        }
+
         return new ValidationSnapshot(
             combined,
-            combined.Count(item => item.Severity == ValidationSeverity.Error),
-            combined.Count(item => item.Severity == ValidationSeverity.Warning));
+            errorCount,
+            warningCount);
     }
 
     public void Schedule(

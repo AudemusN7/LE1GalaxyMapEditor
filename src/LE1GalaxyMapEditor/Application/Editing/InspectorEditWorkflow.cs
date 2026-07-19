@@ -114,9 +114,10 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
             case Cluster cluster when propertyName == nameof(Cluster.Label):
             {
                 var label = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
-                if (!TryLabelSuffix(label, "Cluster", out var suffix) || suffix <= 0 || suffix > int.MaxValue / 10_000)
+                if (!TryLabelSuffix(label, "Cluster", out var suffix) ||
+                    suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
                 {
-                    return "Use Cluster followed by a positive number that can be encoded as a Relay endpoint.";
+                    return "Use a Cluster label from Cluster01 to Cluster99.";
                 }
                 if (document.Clusters.Any(candidate => candidate.RowId != cluster.RowId &&
                         TryLabelSuffix(candidate.Label, "Cluster", out var other) && other == suffix))
@@ -137,9 +138,10 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                 {
                     return $"Cluster row {clusterRowId} is not available.";
                 }
-                if (!TryLabelSuffix(label, "System", out var suffix) || suffix is <= 0 or > 99)
+                if (!TryLabelSuffix(label, "System", out var suffix) ||
+                    suffix is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel)
                 {
-                    return "Use System followed by a number from 01 to 99.";
+                    return "Use a System label from System01 to System09.";
                 }
                 if (document.Systems.Any(candidate => candidate.RowId != system.RowId &&
                         candidate.ClusterRowId == clusterRowId &&
@@ -161,7 +163,8 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                 {
                     return $"System row {systemRowId} is not available or has no valid Cluster.";
                 }
-                if (!TryLabelSuffix(label, "Planet", out var suffix) || suffix is <= 0 or > 99)
+                if (!TryLabelSuffix(label, "Planet", out var suffix) ||
+                    suffix is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel)
                 {
                     return "Use Planet followed by a number from 01 to 99.";
                 }
@@ -383,15 +386,6 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
             return (T)copy;
         }
 
-        static void Dirty(GalaxyMapRow row, params string[] columns)
-        {
-            var snapshot = GalaxyMapRowAuthoring.EnsureSnapshot(row);
-            foreach (var column in columns)
-            {
-                snapshot.MarkDirty(column);
-            }
-        }
-
         void UpdatePlanetIdentity(Planet source, string clusterLabel, string systemLabel, string planetLabel)
         {
             if (!TryCalculateActiveWorld(clusterLabel, systemLabel, planetLabel, out var activeWorld))
@@ -401,12 +395,12 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
 
             var planet = Stage(source);
             planet.ActiveWorld = activeWorld;
-            Dirty(planet, "ActiveWorld");
+            GalaxyMapRowAuthoring.MarkDirty(planet, "ActiveWorld");
             if (source.PlotPlanet is { } sourcePlot)
             {
                 var plot = Stage(sourcePlot);
                 plot.Code = activeWorld;
-                Dirty(plot, "Code");
+                GalaxyMapRowAuthoring.MarkDirty(plot, "Code");
             }
         }
 
@@ -419,7 +413,7 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                 {
                     var token = field.EndsWith("Function", StringComparison.OrdinalIgnoreCase) ? "974" : "1";
                     stagedRow.SetExtraField(field, token);
-                    Dirty(stagedRow, field);
+                    GalaxyMapRowAuthoring.MarkDirty(stagedRow, field);
                 }
 
                 if (availabilityRow is Planet sourcePlanet && sourcePlanet.PlotPlanet is { } sourcePlot)
@@ -430,7 +424,7 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                     {
                         var token = field.EndsWith("Function", StringComparison.OrdinalIgnoreCase) ? "974" : "1";
                         plot.SetExtraField(field, token);
-                        Dirty(plot, field);
+                        GalaxyMapRowAuthoring.MarkDirty(plot, field);
                     }
                 }
                 break;
@@ -438,7 +432,7 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
             case Cluster inspectedCluster when value is string newLabel:
             {
                 if (!TryLabelSuffix(newLabel, "Cluster", out var newClusterNumber) ||
-                    newClusterNumber <= 0 || newClusterNumber > int.MaxValue / 10_000)
+                    newClusterNumber is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
                 {
                     return new InspectorEditResult(false);
                 }
@@ -446,7 +440,7 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                 var effectiveCluster = document.ClustersByRowId.GetValueOrDefault(inspectedCluster.RowId) ?? inspectedCluster;
                 var cluster = Stage(inspectedCluster);
                 cluster.Label = newLabel;
-                Dirty(cluster, "Label");
+                GalaxyMapRowAuthoring.MarkDirty(cluster, "Label");
                 foreach (var system in effectiveCluster.Systems)
                 foreach (var planet in system.Planets)
                 {
@@ -462,12 +456,12 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                     if (sourceRelay.StartCluster?.RowId == effectiveCluster.RowId)
                     {
                         relay.StartClusterEncoded = newCode;
-                        Dirty(relay, "StartCluster");
+                        GalaxyMapRowAuthoring.MarkDirty(relay, "StartCluster");
                     }
                     if (sourceRelay.EndCluster?.RowId == effectiveCluster.RowId)
                     {
                         relay.EndClusterEncoded = newCode;
-                        Dirty(relay, "EndCluster");
+                        GalaxyMapRowAuthoring.MarkDirty(relay, "EndCluster");
                     }
                 }
                 break;
@@ -482,7 +476,8 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                 var systemLabel = moveRequest?.ResultingLabel ?? (propertyName == nameof(GalaxySystem.Label)
                     ? Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty
                     : inspectedSystem.Label);
-                if (!TryLabelSuffix(systemLabel, "System", out var systemNumber) || systemNumber is <= 0 or > 99 ||
+                if (!TryLabelSuffix(systemLabel, "System", out var systemNumber) ||
+                    systemNumber is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
                     !document.ClustersByRowId.TryGetValue(clusterRowId, out var parentCluster))
                 {
                     return new InspectorEditResult(false);
@@ -490,7 +485,7 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
 
                 system.Label = systemLabel;
                 system.ClusterRowId = clusterRowId;
-                Dirty(system, moveRequest is not null
+                GalaxyMapRowAuthoring.MarkDirty(system, moveRequest is not null
                     ? ["Label", "Cluster"]
                     : [propertyName == nameof(GalaxySystem.Label) ? "Label" : "Cluster"]);
                 foreach (var planet in effectiveSystem.Planets)
@@ -507,47 +502,47 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                 {
                     var token = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
                     planet.SetExtraField(mirroredColumn, token);
-                    Dirty(planet, mirroredColumn);
+                    GalaxyMapRowAuthoring.MarkDirty(planet, mirroredColumn);
                     if (effectivePlanet.PlotPlanet is { } sourcePlot)
                     {
                         var plot = Stage(sourcePlot);
                         plot.SetExtraField(mirroredColumn, token);
-                        Dirty(plot, mirroredColumn);
+                        GalaxyMapRowAuthoring.MarkDirty(plot, mirroredColumn);
                     }
                     break;
                 }
                 if (propertyName == nameof(Planet.SystemLevelType))
                 {
                     planet.SystemLevelType = Convert.ToInt32(value, CultureInfo.InvariantCulture);
-                    Dirty(planet, "SystemLevelType");
+                    GalaxyMapRowAuthoring.MarkDirty(planet, "SystemLevelType");
                     if (planet.SystemLevelType != 2 && planet.RingColor != -1)
                     {
                         planet.RingColor = -1;
-                        Dirty(planet, "RingColor");
+                        GalaxyMapRowAuthoring.MarkDirty(planet, "RingColor");
                     }
                     break;
                 }
                 if (propertyName == nameof(Planet.Name))
                 {
                     planet.Name = Convert.ToInt32(value, CultureInfo.InvariantCulture);
-                    Dirty(planet, "Name");
+                    GalaxyMapRowAuthoring.MarkDirty(planet, "Name");
                     if (effectivePlanet.PlotPlanet is { } sourcePlot)
                     {
                         var plot = Stage(sourcePlot);
                         plot.Name = planet.Name;
-                        Dirty(plot, "Name");
+                        GalaxyMapRowAuthoring.MarkDirty(plot, "Name");
                     }
                     break;
                 }
                 if (propertyName == nameof(Planet.NameText))
                 {
                     planet.NameText = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
-                    Dirty(planet, "NameText");
+                    GalaxyMapRowAuthoring.MarkDirty(planet, "NameText");
                     if (effectivePlanet.PlotPlanet is { } sourcePlot)
                     {
                         var plot = Stage(sourcePlot);
                         plot.NameText = planet.NameText;
-                        Dirty(plot, "NameText");
+                        GalaxyMapRowAuthoring.MarkDirty(plot, "NameText");
                     }
                     break;
                 }
@@ -567,14 +562,14 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                 planet.Label = planetLabel;
                 planet.SystemRowId = systemRowId;
                 planet.ActiveWorld = activeWorld;
-                Dirty(planet, moveRequest is not null
+                GalaxyMapRowAuthoring.MarkDirty(planet, moveRequest is not null
                     ? ["Label", "System", "ActiveWorld"]
                     : [propertyName == nameof(Planet.Label) ? "Label" : "System", "ActiveWorld"]);
                 if (effectivePlanet.PlotPlanet is { } linkedPlot)
                 {
                     var plot = Stage(linkedPlot);
                     plot.Code = activeWorld;
-                    Dirty(plot, "Code");
+                    GalaxyMapRowAuthoring.MarkDirty(plot, "Code");
                 }
                 break;
             }
@@ -649,7 +644,7 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
 
         return document.Clusters.Count(cluster =>
             TryLabelSuffix(cluster.Label, "Cluster", out var suffix) &&
-            suffix > 0 && suffix <= int.MaxValue / 10_000 &&
+            suffix is > 0 and <= GalaxyMapIdentityLimits.MaxClusterLabel &&
             suffix * 10_000 == encoded) == 1;
     }
 
@@ -665,15 +660,18 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
         out int activeWorld)
     {
         activeWorld = 0;
-        if (!TryLabelSuffix(clusterLabel, "Cluster", out var cluster) || cluster <= 0 ||
-            !TryLabelSuffix(systemLabel, "System", out var system) || system is <= 0 or > 99 ||
-            !TryLabelSuffix(planetLabel, "Planet", out var planet) || planet is <= 0 or > 99)
+        if (!TryLabelSuffix(clusterLabel, "Cluster", out var cluster) ||
+            cluster is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel ||
+            !TryLabelSuffix(systemLabel, "System", out var system) ||
+            system is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
+            !TryLabelSuffix(planetLabel, "Planet", out var planet) ||
+            planet is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel)
         {
             return false;
         }
 
         var calculated = (long)cluster * 10_000 + system * 100L + planet;
-        if (calculated > int.MaxValue)
+        if (calculated > GalaxyMapIdentityLimits.MaxActiveWorld)
         {
             return false;
         }

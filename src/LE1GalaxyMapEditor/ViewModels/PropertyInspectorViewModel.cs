@@ -575,20 +575,6 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             return null;
         }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
 
-    private InspectorFieldViewModel Long(
-        string name, Func<long> getter, Action<long> setter, bool isMain = true)
-        => new(name, getter().ToString(CultureInfo.InvariantCulture), isMain, IsReadOnly(name), value =>
-        {
-            if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
-            {
-                return "Enter a whole number.";
-            }
-
-            if (ValidateCurrent(name, parsed) is { } error) return error;
-            _workflow.BeginEdit(); setter(parsed);
-            return null;
-        }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
-
     private InspectorFieldViewModel Number(
         string name, Func<double> getter, Action<double> setter, bool isMain = true)
         => new(name, GalaxyMapNumber.FormatDisplay(getter()), isMain, IsReadOnly(name), value =>

@@ -2,8 +2,6 @@
 
 This page collects the keyboard controls, mouse gestures and less obvious interactions used throughout the application.
 
-[IMAGE: Galaxy Map Editor with a context menu, map drag coordinates, module indicators and resizable pane edges highlighted]
-
 ## Keyboard reference
 
 ### Galaxy Map Editor
@@ -65,8 +63,6 @@ In Relay destination-selection mode, single-click a Cluster to choose it. Double
 Relevant add commands also appear on blank map space and suitable hierarchy rows.
 
 Read-only ownership may disable or remove actions that cannot be represented safely in a module override.
-
-[IMAGE: Context menus for a Cluster, System and planet/system object shown side by side]
 
 ## Properties interactions
 

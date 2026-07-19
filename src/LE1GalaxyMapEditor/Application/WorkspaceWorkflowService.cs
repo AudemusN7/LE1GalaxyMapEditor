@@ -274,7 +274,7 @@ public sealed class WorkspaceWorkflowService
             }
 
             ClearStartupIssueFor(module.Tag, module.FolderPath);
-            RememberCurrentWorkspace();
+            _edits.StageWorkspaceModuleAdded(module);
             _session.Publish(ChangeImpact.StructuralAll);
             return WorkflowResult.Success(
                 module.IsReadOnly
@@ -317,7 +317,7 @@ public sealed class WorkspaceWorkflowService
             var layer = _loader.LoadPartFolder(folderPath, module);
             workspace.Mount(layer);
             ClearStartupIssueFor(module.Tag, module.FolderPath);
-            RememberCurrentWorkspace();
+            _edits.StageWorkspaceModuleAdded(module);
             _session.Publish(ChangeImpact.StructuralAll);
             return WorkflowResult.Success(
                 $"Mounted read-only module {module.Name} [{module.Tag}] above the lower layers.",
@@ -376,22 +376,8 @@ public sealed class WorkspaceWorkflowService
                 workspace.SetActiveModule(fallback);
             }
 
-            try
-            {
-                RememberCurrentWorkspace();
-            }
-            catch
-            {
-                workspace.Mount(layer);
-                if (wasActive)
-                {
-                    workspace.SetActiveModule(module);
-                }
-
-                throw;
-            }
-
             _edits.RemoveModuleChanges(module.Tag);
+            _edits.StageWorkspaceModuleRemoved(module);
             _edits.ClearHistory();
             _session.Publish(ChangeImpact.StructuralAll);
             return WorkflowResult.Success(
@@ -579,6 +565,20 @@ public sealed class WorkspaceWorkflowService
     }
 
     public void RememberCurrentWorkspace()
+    {
+        // A staged mount/unmount must not leak into workspace.json through an
+        // otherwise immediate setting change such as selecting the active module.
+        if (_session.Changes.HasWorkspaceChanges)
+        {
+            return;
+        }
+
+        SaveCurrentWorkspace();
+    }
+
+    public void CommitCurrentWorkspace() => SaveCurrentWorkspace();
+
+    private void SaveCurrentWorkspace()
     {
         var workspace = _session.Workspace;
         if (workspace is null || _isRestoring)

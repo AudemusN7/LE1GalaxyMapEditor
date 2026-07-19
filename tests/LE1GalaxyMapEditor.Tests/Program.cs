@@ -63,11 +63,14 @@ internal static class Program
         Run("Commit preview describes and protects staged writes", CommitPreviewDescribesAndProtectsStagedWrites);
         Run("Scalar edits preserve hierarchy identity", ScalarEditsPreserveHierarchyIdentity);
         Run("Reserved-range row creation", ReservedRangeRowCreation);
+        Run("Galaxy-map label and ActiveWorld limits", GalaxyMapIdentityLimitsAreEnforced);
+        Run("Cluster creation requires a coordinated global label", ClusterCreationRequiresGlobalLabel);
         Run("Partial module reservations", PartialModuleReservations);
         Run("PlotPlanet and Map persistence", PlotPlanetAndMapPersistence);
         Run("Inherited Relay rows redirect by override", InheritedRelayRedirectPersistence);
         Run("Remembered module workspace and missing paths", RememberedModuleWorkspace);
         Run("Unlinking a module preserves its files", ModuleUnlinkPreservesFiles);
+        Run("Open and unlink workspace membership waits for reviewed Commit", ModuleMembershipWaitsForCommit);
         Run("Mount priority and row-instance comparison", MountPriorityAndRowInstances);
         Run("Duplicate row delete follows the active module", DuplicateRowDeleteFollowsActiveModule);
         Run("Module Cluster textures and nebula systems", ModuleTexturesAndNebulaSystems);
@@ -2137,6 +2140,97 @@ internal static class Program
         });
     }
 
+    private static void GalaxyMapIdentityLimitsAreEnforced()
+    {
+        Equal(99, GalaxyMapIdentityLimits.MaxClusterLabel, "Cluster label ceiling");
+        Equal(9, GalaxyMapIdentityLimits.MaxSystemLabel, "System label ceiling");
+        Equal(99, GalaxyMapIdentityLimits.MaxPlanetLabel, "Planet label ceiling");
+        Equal(990999, GalaxyMapIdentityLimits.MaxActiveWorld, "ActiveWorld ceiling");
+
+        var boundaryDocument = new GalaxyMapDocument();
+        var cluster = new Cluster { RowId = 1, Label = "Cluster99", NameText = "Boundary Cluster" };
+        var system = new GalaxySystem
+        {
+            RowId = 1,
+            Label = "System09",
+            ClusterRowId = cluster.RowId,
+            NameText = "Boundary System",
+            Scale = 1
+        };
+        boundaryDocument.Clusters.Add(cluster);
+        boundaryDocument.Systems.Add(system);
+        boundaryDocument.RebuildRelationships();
+        True(GalaxyMapRowFactory.TryDeriveActiveWorld(system, "Planet99", out var boundaryActiveWorld),
+            "maximum supported label chain derives successfully");
+        Equal(990999, boundaryActiveWorld, "maximum label chain resolves to ActiveWorld 990999");
+        True(!GalaxyMapRowFactory.TryDeriveActiveWorld(system, "Planet100", out _),
+            "Planet100 cannot produce an ActiveWorld ID");
+
+        WithTemporaryDirectory(parent =>
+        {
+            var viewModel = new MainViewModel(
+                new CsvGalaxyMapLoader(),
+                new GalaxyMapTextureService(FindTextureDirectory()),
+                new GalaxyMapWorkspaceStore(Path.Combine(parent, "workspace.json")));
+            True(viewModel.LoadBuiltIn(), "BASEGAME loads for identity-limit authoring checks");
+            True(viewModel.CreateModule(parent, "Identity Limits", "IDENTITY_LIMITS", ModuleColor.Cyan,
+                TestReservations()), "identity-limit module created");
+
+            var sourceCluster = viewModel.Document!.Clusters.First();
+            var sourceSystem = sourceCluster.Systems.First();
+            var sourcePlanet = sourceSystem.Planets.First();
+            True(!viewModel.CloneRow(sourceCluster,
+                    new CloneContentRequest(100, "Cluster100", 0, "Invalid Cluster", false)),
+                "Cluster100 clone is rejected");
+            True(!viewModel.CloneRow(sourceSystem,
+                    new CloneContentRequest(1000, "System10", 0, "Invalid System", false)),
+                "System10 clone is rejected");
+            True(!viewModel.CloneRow(sourcePlanet,
+                    new CloneContentRequest(10000, "Planet100", 0, "Invalid Planet", false)),
+                "Planet100 clone is rejected");
+            True(!viewModel.Document.ClustersByRowId.ContainsKey(100),
+                "rejected Cluster clone creates no row");
+            True(!viewModel.Document.SystemsByRowId.ContainsKey(1000),
+                "rejected System clone creates no row");
+            True(!viewModel.Document.PlanetsByRowId.ContainsKey(10000),
+                "rejected Planet clone creates no row");
+        });
+    }
+
+    private static void ClusterCreationRequiresGlobalLabel()
+    {
+        WithTemporaryDirectory(parent =>
+        {
+            ClusterLabelRequest? prompted = null;
+            var viewModel = new MainViewModel(
+                new CsvGalaxyMapLoader(),
+                new GalaxyMapTextureService(FindTextureDirectory()),
+                new GalaxyMapWorkspaceStore(Path.Combine(parent, "workspace.json")),
+                clusterLabelSelector: request =>
+                {
+                    prompted = request;
+                    return "Cluster50";
+                });
+            True(viewModel.LoadBuiltIn(), "BASEGAME loads for Cluster-label prompt");
+            True(viewModel.CreateModule(parent, "Prompt Test", "PROMPT_TEST", ModuleColor.Cyan,
+                TestReservations()), "prompt-test module created");
+
+            viewModel.AddClusterCommand.Execute(null);
+            NotNull(prompted, "Add Cluster asks for a global Cluster label");
+            Equal("Cluster22", prompted!.SuggestedLabel,
+                "prompt avoids gaps inside vanilla's reserved Cluster01-Cluster21 range");
+            True(prompted.MountedLabels.Any(label => label.Contains("BASEGAME", StringComparison.Ordinal)),
+                "prompt identifies labels from mounted modules");
+            True(prompted.Validate("Cluster02") is not null,
+                "vanilla-range Cluster labels are rejected even when the number is a gap");
+            True(prompted.Validate("Cluster100") is not null, "Cluster100 is rejected by the prompt");
+            True(prompted.Validate("Cluster03") is not null, "mounted Cluster collisions are rejected by the prompt");
+            True(prompted.Validate("Cluster51") is null, "another unused coordinated Cluster label is accepted");
+            Equal("Cluster50", viewModel.Document!.ClustersByRowId[100].Label,
+                "chosen Cluster label is used for the new row");
+        });
+    }
+
     private static void PartialModuleReservations()
     {
         WithTemporaryDirectory(parent =>
@@ -2217,7 +2311,7 @@ internal static class Program
             True(viewModel.CreateModule(parent, "Clone Test", "CLONE_TEST", ModuleColor.Purple, TestReservations()), "module created");
 
             var source = viewModel.Document!.Systems.OrderBy(system => system.Planets.Count).First();
-            True(viewModel.CloneRow(source, new CloneContentRequest(1000, "System99", 0, "Cloned System", true)), "System clone succeeds");
+            True(viewModel.CloneRow(source, new CloneContentRequest(1000, "System09", 0, "Cloned System", true)), "System clone succeeds");
             var clone = viewModel.Document.SystemsByRowId[1000];
             Equal(source.Planets.Count, clone.Planets.Count, "child Planets cloned");
             True(clone.Planets.All(planet => planet.SystemRowId == clone.RowId), "cloned children point at new System");
@@ -2277,7 +2371,7 @@ internal static class Program
             var targetCluster = viewModel.Document.Clusters
                 .Where(cluster => cluster.RowId != sourceSystem.ClusterRowId && cluster.Systems.Count > 0)
                 .First(cluster => cluster.Systems.All(system =>
-                    !system.Label.Equals("System99", StringComparison.OrdinalIgnoreCase)));
+                    !system.Label.Equals("System09", StringComparison.OrdinalIgnoreCase)));
 
             var sourceSystemRowId = sourceSystem.RowId;
             var sourceClusterRowId = sourceSystem.ClusterRowId;
@@ -2298,7 +2392,7 @@ internal static class Program
                 "direct BASEGAME move is one undoable transaction");
 
             True(viewModel.CloneRow(sourceSystem,
-                new CloneContentRequest(1000, "System99", 0, "Movable System", true)),
+                new CloneContentRequest(1000, "System09", 0, "Movable System", true)),
                 "module-owned System clone succeeds");
             var clone = viewModel.Document!.SystemsByRowId[1000];
             var originalClusterRowId = clone.ClusterRowId;
@@ -2340,12 +2434,12 @@ internal static class Program
 
             var targetSystemSource = viewModel.Document.ClustersByRowId[targetCluster.RowId].Systems.First();
             True(viewModel.CloneRow(targetSystemSource,
-                new CloneContentRequest(1001, "System99", 0, "Collision System", false)),
+                new CloneContentRequest(1001, "System09", 0, "Collision System", false)),
                 "destination-scoped collision System is created");
             True(viewModel.MoveRow(viewModel.Document.SystemsByRowId[1000], targetCluster.RowId),
                 "System move resolves a destination label collision");
             moved = viewModel.Document.SystemsByRowId[1000];
-            True(!moved.Label.Equals("System99", StringComparison.OrdinalIgnoreCase),
+            True(!moved.Label.Equals("System09", StringComparison.OrdinalIgnoreCase),
                 "conflicting System label is allocated automatically");
             Equal(viewModel.Document.ClustersByRowId[targetCluster.RowId].Systems.Count,
                 viewModel.Document.ClustersByRowId[targetCluster.RowId].Systems
@@ -2479,12 +2573,12 @@ internal static class Program
 
             FindNode(viewModel, row => row is GalaxySystem candidate && candidate.RowId == sourceSystem.RowId).IsSelected = true;
             viewModel.Inspector.Sections.Single(section => section.Title == "System")
-                .Fields.Single(field => field.Name == "Label").Value = "System99";
+                .Fields.Single(field => field.Name == "Label").Value = "System09";
 
             var updatedPlanet = viewModel.Document.PlanetsByRowId[sourcePlanet.RowId];
             var clusterSuffix = int.Parse(updatedPlanet.System!.Cluster!.Label["Cluster".Length..], CultureInfo.InvariantCulture);
             var planetSuffix = int.Parse(updatedPlanet.Label["Planet".Length..], CultureInfo.InvariantCulture);
-            Equal(clusterSuffix * 10_000 + 9_900 + planetSuffix, updatedPlanet.ActiveWorld,
+            Equal(clusterSuffix * 10_000 + 900 + planetSuffix, updatedPlanet.ActiveWorld,
                 "System relabel recalculates child ActiveWorld");
             Equal(updatedPlanet.ActiveWorld, updatedPlanet.PlotPlanet!.Code,
                 "System relabel updates linked PlotPlanet Code");
@@ -2790,14 +2884,84 @@ internal static class Program
             True(viewModel.UnlinkModule(stagedModule), "module unlinks successfully");
             Equal(0, viewModel.Workspace!.ModuleLayers.Count, "module layer is removed from memory");
             True(viewModel.ActiveModule is null, "active module clears when no writable fallback exists");
-            True(!viewModel.HasPendingChanges, "unlinked module dirty state is discarded");
+            True(viewModel.HasPendingChanges, "unlink remains staged as a workspace change");
             True(confirmation?.Contains("staged changes", StringComparison.OrdinalIgnoreCase) == true,
                 "confirmation warns about staged changes");
             True(Directory.Exists(moduleFolder), "module folder is preserved");
             True(File.Exists(Path.Combine(moduleFolder, GalaxyMapModuleManifestStore.FileName)),
                 "module manifest is preserved");
+            Equal(1, new GalaxyMapWorkspaceStore(settingsPath).Load().Modules.Count,
+                "workspace JSON keeps the module until Commit");
+            var removal = viewModel.CreateCommitPreview().Sections
+                .Single(section => section.FileName == GalaxyMapWorkspaceStore.FileName)
+                .Entries.Single();
+            Equal("REMOVE", removal.Badge, "review identifies the staged workspace removal");
+            True(viewModel.CommitPendingChanges(), "workspace removal commits");
             Equal(0, new GalaxyMapWorkspaceStore(settingsPath).Load().Modules.Count,
-                "workspace JSON no longer remembers the module");
+                "workspace JSON forgets the module after Commit");
+        });
+    }
+
+    private static void ModuleMembershipWaitsForCommit()
+    {
+        WithTemporaryDirectory(parent =>
+        {
+            var sourceSettings = Path.Combine(parent, "source-workspace.json");
+            var source = new MainViewModel(
+                new CsvGalaxyMapLoader(),
+                new GalaxyMapTextureService(FindTextureDirectory()),
+                new GalaxyMapWorkspaceStore(sourceSettings));
+            True(source.LoadBuiltIn(), "source BASEGAME loads");
+            True(source.CreateModule(parent, "Open Test", "OPEN_TEST", ModuleColor.Cyan,
+                TestReservations()), "source module is created");
+            var moduleFolder = source.ActiveModule!.FolderPath!;
+
+            var settingsPath = Path.Combine(parent, "opened-workspace.json");
+            CommitPreview? reviewed = null;
+            var allowCommit = false;
+            var viewModel = new MainViewModel(
+                new CsvGalaxyMapLoader(),
+                new GalaxyMapTextureService(FindTextureDirectory()),
+                new GalaxyMapWorkspaceStore(settingsPath),
+                confirmAction: _ => true,
+                commitReviewAction: preview =>
+                {
+                    reviewed = preview;
+                    return allowCommit;
+                });
+            True(viewModel.LoadBuiltIn(), "target BASEGAME loads");
+            True(viewModel.OpenExistingModule(moduleFolder), "existing module opens in memory");
+            True(viewModel.HasPendingChanges, "opening stages workspace membership");
+            True(!File.Exists(settingsPath), "opening does not create workspace JSON");
+            var addition = viewModel.CreateCommitPreview().Sections
+                .Single(section => section.FileName == GalaxyMapWorkspaceStore.FileName)
+                .Entries.Single();
+            Equal("ADD", addition.Badge, "review identifies the staged workspace addition");
+
+            viewModel.CommitCommand.Execute(null);
+            NotNull(reviewed, "staged addition opens Review changes");
+            True(!File.Exists(settingsPath), "cancelling review does not persist the addition");
+            allowCommit = true;
+            viewModel.CommitCommand.Execute(null);
+            Equal(1, new GalaxyMapWorkspaceStore(settingsPath).Load().Modules.Count,
+                "Commit persists the opened module");
+
+            var openedModule = viewModel.ActiveModule!;
+            True(viewModel.UnlinkModule(openedModule), "opened module unlinks in memory");
+            Equal(1, new GalaxyMapWorkspaceStore(settingsPath).Load().Modules.Count,
+                "unlink does not immediately persist the removal");
+            var removal = viewModel.CreateCommitPreview().Sections
+                .Single(section => section.FileName == GalaxyMapWorkspaceStore.FileName)
+                .Entries.Single();
+            Equal("REMOVE", removal.Badge, "review identifies the staged workspace removal");
+            allowCommit = false;
+            viewModel.CommitCommand.Execute(null);
+            Equal(1, new GalaxyMapWorkspaceStore(settingsPath).Load().Modules.Count,
+                "cancelling review does not persist the removal");
+            allowCommit = true;
+            viewModel.CommitCommand.Execute(null);
+            Equal(0, new GalaxyMapWorkspaceStore(settingsPath).Load().Modules.Count,
+                "Commit persists the unlink");
         });
     }
 
@@ -3246,6 +3410,48 @@ internal static class Program
             editableWindow.DataContext = null;
             editableWindow.Close();
 
+            var texturePlanet = editableViewModel.Document!.Planets
+                .First(PlanetAppearanceCodec.IsAppearanceCapable);
+            var textureDesigner = editableViewModel.CreatePlanetDesigner(texturePlanet.Key);
+            var textureFields = textureDesigner.Groups.SelectMany(group => group.Fields)
+                .Where(field => field.IsTexture)
+                .ToArray();
+            var originalTextureReferences = textureFields.ToDictionary(
+                field => field.Definition.Id,
+                field => field.Primary.RawValue);
+            var textureEditors = new StackPanel();
+            foreach (var field in textureFields)
+            {
+                var editor = new ComboBox
+                {
+                    DataContext = field,
+                    IsEditable = true
+                };
+                editor.SetBinding(ItemsControl.ItemsSourceProperty, new Binding(nameof(field.TextureOptions)));
+                editor.SetBinding(ComboBox.TextProperty, new Binding("Primary.Value")
+                {
+                    Mode = BindingMode.TwoWay,
+                    UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged
+                });
+                textureEditors.Children.Add(editor);
+            }
+
+            var textureEditorHost = new Window { Content = textureEditors };
+            textureEditorHost.Show();
+            Compose(textureEditorHost, application.Dispatcher);
+            True(textureDesigner.LinkModuleTexture(new PlanetTextureLinkRequest(
+                    "BIOA_TABLE_GRID_EDIT_T.RefreshSafety",
+                    Path.Combine(FindTextureDirectory(), "Cluster01.jpg"),
+                    PlanetTextureCategory.Continent | PlanetTextureCategory.Normals)),
+                "a module texture can be linked while all editable texture selectors are live");
+            application.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+            foreach (var field in textureFields)
+            {
+                Equal(originalTextureReferences[field.Definition.Id], field.Primary.RawValue,
+                    $"live texture-option refresh preserves {field.Definition.Id}");
+            }
+            textureEditorHost.Close();
+
             var creationWindow = new PlanetCreationWindow();
             Compose(creationWindow, application.Dispatcher);
             var planetTemplateWindow = new PlanetTemplateWindow();
@@ -3307,6 +3513,16 @@ internal static class Program
             Compose(shaderNameWindow, application.Dispatcher);
             Equal("TEST_MODULE_Planet123", shaderNameWindow.ShaderName,
                 "Planet Shader prompt composes with its unique suggested name");
+            var clusterLabelWindow = new ClusterLabelWindow(new ClusterLabelRequest(
+                "Cluster50",
+                ["Cluster03 — BASEGAME", "Cluster50 — TEST_MODULE"],
+                label => label == "Cluster50" ? null : "Choose Cluster50."));
+            Compose(clusterLabelWindow, application.Dispatcher);
+            Equal("Cluster50", clusterLabelWindow.ClusterLabel,
+                "Cluster-label coordination prompt composes with its suggested label");
+            True(((TextBlock)clusterLabelWindow.FindName("MountedLabelsText")).Text
+                    .Contains("TEST_MODULE", StringComparison.Ordinal),
+                "Cluster-label prompt displays mounted-module ownership");
             var moveWindow = new MoveDestinationWindow(
                 viewModel.Document!.Systems.First(),
                 [new MoveDestinationOption(99, "Test Cluster", "Test Cluster • row 99", "System01", "System02")]);

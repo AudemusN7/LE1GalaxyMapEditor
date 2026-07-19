@@ -38,7 +38,13 @@ public sealed class CsvGalaxyMapLoader
         }
 
         var fullFolderPath = Path.GetFullPath(folderPath);
-        var files = TableNames.ToDictionary(name => name, name => FindTableFile(fullFolderPath, name));
+        var csvFiles = Directory.EnumerateFiles(
+            fullFolderPath,
+            "*.csv",
+            System.IO.SearchOption.TopDirectoryOnly).ToArray();
+        var files = TableNames.ToDictionary(
+            name => name,
+            name => FindTableFile(fullFolderPath, name, csvFiles));
         var sources = files.ToDictionary(pair => pair.Key, pair => CsvTableSource.FromFile(pair.Value));
         return LoadSources(sources, fullFolderPath, GalaxyMapModule.BaseGame);
     }
@@ -200,9 +206,11 @@ public sealed class CsvGalaxyMapLoader
             });
     }
 
-    private static string FindTableFile(string folderPath, string tableName)
+    private static string FindTableFile(
+        string folderPath,
+        string tableName,
+        IReadOnlyList<string> files)
     {
-        var files = Directory.EnumerateFiles(folderPath, "*.csv", System.IO.SearchOption.TopDirectoryOnly).ToArray();
         var preferredNames = new[] { $"GalaxyMap_{tableName}", tableName };
 
         foreach (var preferredName in preferredNames)

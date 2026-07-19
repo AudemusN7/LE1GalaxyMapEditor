@@ -12,7 +12,8 @@ public sealed class WpfEditorDialogs(
     Func<GalaxyMapRow, IReadOnlyList<GalaxyMapModule>, GalaxyMapModule?>? editTargetSelector = null,
     Func<string, bool>? confirmAction = null,
     Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null,
-    Func<CommitPreview, bool>? commitReviewAction = null) : IEditorDialogs
+    Func<CommitPreview, bool>? commitReviewAction = null,
+    Func<ClusterLabelRequest, string?>? clusterLabelSelector = null) : IEditorDialogs
 {
     public ModuleSetupResult? ConfigureModule(ModuleSetupDialogRequest request)
     {
@@ -109,6 +110,23 @@ public sealed class WpfEditorDialogs(
         }
 
         return request.SuggestedName;
+    }
+
+    public string? ChooseClusterLabel(ClusterLabelRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (clusterLabelSelector is not null)
+        {
+            return clusterLabelSelector(request);
+        }
+
+        if (ActiveOwner() is { IsLoaded: true } owner)
+        {
+            var dialog = new ClusterLabelWindow(request) { Owner = owner };
+            return dialog.ShowDialog() == true ? dialog.ClusterLabel : null;
+        }
+
+        return request.SuggestedLabel;
     }
 
     public string? PickClusterTexture()

@@ -48,6 +48,11 @@ Clusters, Systems and Planets also carry internal numbered labels:
 
 The suffixes form a second identity system used by Relay and ActiveWorld.
 
+LE1 supports only `Cluster01`-`Cluster99`, `System01`-`System09` within each Cluster, and
+`Planet01`-`Planet99` within each System. The highest supported label chain is therefore
+`Cluster99 / System09 / Planet99`, which produces ActiveWorld `990999`. The editor rejects
+authoring operations outside these ranges and reports imported out-of-range labels as errors.
+
 Cluster suffixes must be unique across the galaxy. System suffixes must be unique inside their parent Cluster, and Planet suffixes must be unique inside their parent System. System and Planet suffixes must fit the range 1–99.
 
 ### ActiveWorld

@@ -5,12 +5,3 @@ obj/
 *.suo
 TestResults/
 artifacts/
-
-# Local documentation, test fixtures, and development tools are not release source.
-/tests/
-/tools/
-
-# Local planet-renderer research. The production implementation belongs under src/.
-tools/LE1PlanetRenderer/
-tools/LE1PlanetMaterialResearch/
-tests/Shader Research/

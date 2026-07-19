@@ -13,7 +13,7 @@ You need the Desktop Runtime, not the larger developer SDK. The runtime is not b
 
 On first launch, the editor loads its built-in **BASEGAME READ-ONLY** data. On later launches it also restores the module folders remembered in your workspace.
 
-[IMAGE: First launch showing BASEGAME READ-ONLY, the module bar and the New Module and Open Module controls]
+![First launch showing BASEGAME READ-ONLY, the module bar and the New Module and Open Module controls](docs/images/first-launch.png)
 
 ## Create an authoring module
 
@@ -25,11 +25,11 @@ Choose **New Module**, then complete the module details:
 | **Module tag** | A unique short tag using letters, numbers, `_` or `-`.  I recommend using your DLC name `eg. DLC_MOD_GalaxyMap`.|
 | **Map colour** | The colour used to identify this module's rows and values. |
 | **Mount priority** | Use the same number as your DLC's mount. |
-| Reserved ranges | Inclusive ID ranges available for new rows. Leave unused ranges blank. |
+| Reserved ranges | Inclusive ID ranges available for new rows. Leave ranges blank for 2DAs you don't need to include. |
 
 Planet and PlotPlanet share the same reserved range. Reserved ranges must not overlap another mounted module's ranges.
 
-[IMAGE: New Module window showing Display name, Module tag, Map colour, Mount priority and reserved ID ranges]
+![New Module window showing Display name, Module tag, Map colour, Mount priority and reserved ID ranges](docs/images/new-module.png)
 
 Creating the module immediately creates its folder and `module.json`. Galaxy-map content is not written until you use **Commit**.
 
@@ -47,7 +47,7 @@ Select the folder that contains your exported CSV files and open it. It will (if
 4. Review the uncommitted-change indicator on the module bar.
 5. Choose **Commit**, review the staged changes, then choose **Commit changes** to write the module files.
 
-[IMAGE: Selected BASEGAME planet with the Choose edit module window open]
+![Selected BASEGAME planet with the Choose edit module window open](docs/images/choose-edit-module.png)
 
 You can also begin with **Add Cluster**, **Add System** or **Add Planet/Object**. New content is created inside the active module's reserved ID ranges.
 You may also right click on any Cluster, System or Planet/Object and **Clone** it. This will create an exact copy of it inside your module, and optionally all the children of a cluster/system as well.

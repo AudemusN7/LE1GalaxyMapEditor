@@ -2,7 +2,7 @@
 
 The 2DA Table Editor provides a spreadsheet-style view of the galaxy-map data currently mounted in the workspace.
 
-[IMAGE: 2DA Table Editor showing its six tabs, module colour key, editing hint and uncommitted cells]
+![2DA Table Editor GUI, showcasing colour-coded modules, cell selection and invalid value](docs/images/2da-editor.png)
 
 ## Open the table view
 
@@ -43,7 +43,8 @@ The legend summarises this as **filled = uncommitted** and **outline = effective
 
 Hover over a cell to see its source module, how many module versions of the row exist and whether its value differs from a lower source.
 
-[IMAGE: Close-up of a table row with module-coloured outlines, an uncommitted filled cell and its source tooltip]
+![2DA colour-coded rows](docs/images/2da-row.png)
+![2DA cell hover tooltip](docs/images/2da-tooltip.png)
 
 ## Edit a cell
 
@@ -74,7 +75,7 @@ Editing one cell creates a complete same-ID override row. The cell you changed r
 
 Invalid input stays in edit mode. The cell receives a red border and tooltip explaining the problem.
 
-[IMAGE: Invalid 2DA cell with dark red styling and its validation tooltip visible]
+![Invalid 2DA cell with dark red styling and its validation tooltiptooltip](docs/images/2da-error.png)
 
 ## Managed and read-only columns
 

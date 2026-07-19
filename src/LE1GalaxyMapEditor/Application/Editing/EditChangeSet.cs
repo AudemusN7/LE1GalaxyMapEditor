@@ -10,10 +10,23 @@ public sealed record PendingFileWrite(
     GalaxyMapRowKey? RelatedRow = null,
     string? CacheKey = null);
 
+public enum WorkspaceModuleChangeKind
+{
+    Add,
+    Remove
+}
+
+public sealed record WorkspaceModuleChange(
+    string FolderPath,
+    string ModuleName,
+    string ModuleTag,
+    WorkspaceModuleChangeKind Kind);
+
 public sealed record EditChangeSetSnapshot(
     IReadOnlyDictionary<string, IReadOnlySet<GalaxyMapTable>> DirtyTables,
     IReadOnlySet<string> DirtyModuleMetadata,
-    IReadOnlyList<PendingFileWrite> PendingFiles);
+    IReadOnlyList<PendingFileWrite> PendingFiles,
+    IReadOnlyList<WorkspaceModuleChange> WorkspaceModuleChanges);
 
 public sealed class EditChangeSet
 {
@@ -21,6 +34,8 @@ public sealed class EditChangeSet
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dirtyModuleMetadata = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string ModuleTag, string RelativePath), PendingFileWrite> _pendingFiles = [];
+    private readonly Dictionary<string, WorkspaceModuleChange> _workspaceModuleChanges =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyDictionary<string, IReadOnlySet<GalaxyMapTable>> DirtyTables
         => _dirtyTables.ToDictionary(
@@ -30,9 +45,32 @@ public sealed class EditChangeSet
 
     public IReadOnlySet<string> DirtyModuleMetadata => _dirtyModuleMetadata;
     public IReadOnlyCollection<PendingFileWrite> PendingFiles => _pendingFiles.Values;
-    public bool HasChanges => _dirtyTables.Count > 0 || _dirtyModuleMetadata.Count > 0 || _pendingFiles.Count > 0;
+    public IReadOnlyCollection<WorkspaceModuleChange> WorkspaceModuleChanges => _workspaceModuleChanges.Values;
+    public bool HasWorkspaceChanges => _workspaceModuleChanges.Count > 0;
+    public bool HasChanges => _dirtyTables.Count > 0 || _dirtyModuleMetadata.Count > 0 ||
+                              _pendingFiles.Count > 0 || _workspaceModuleChanges.Count > 0;
     public int Count => _dirtyTables.Values.Sum(tables => tables.Count) +
-                        _dirtyModuleMetadata.Count + _pendingFiles.Count;
+                        _dirtyModuleMetadata.Count + _pendingFiles.Count + _workspaceModuleChanges.Count;
+
+    internal void StageWorkspaceModuleAdded(GalaxyMapModule module)
+        => StageWorkspaceModuleChange(module, WorkspaceModuleChangeKind.Add);
+
+    internal void StageWorkspaceModuleRemoved(GalaxyMapModule module)
+        => StageWorkspaceModuleChange(module, WorkspaceModuleChangeKind.Remove);
+
+    private void StageWorkspaceModuleChange(GalaxyMapModule module, WorkspaceModuleChangeKind kind)
+    {
+        var folderPath = module.FolderPath
+            ?? throw new InvalidOperationException("A staged workspace module must have a folder.");
+        if (_workspaceModuleChanges.TryGetValue(folderPath, out var existing) && existing.Kind != kind)
+        {
+            _workspaceModuleChanges.Remove(folderPath);
+            return;
+        }
+
+        _workspaceModuleChanges[folderPath] = new WorkspaceModuleChange(
+            folderPath, module.Name, module.Tag, kind);
+    }
 
     internal bool MarkTable(string moduleTag, GalaxyMapTable table)
     {
@@ -133,7 +171,8 @@ public sealed class EditChangeSet
                 pair => (IReadOnlySet<GalaxyMapTable>)new HashSet<GalaxyMapTable>(pair.Value),
                 StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(_dirtyModuleMetadata, StringComparer.OrdinalIgnoreCase),
-            _pendingFiles.Values.Select(Clone).ToArray());
+            _pendingFiles.Values.Select(Clone).ToArray(),
+            _workspaceModuleChanges.Values.ToArray());
 
     internal void Restore(EditChangeSetSnapshot snapshot)
     {
@@ -152,6 +191,11 @@ public sealed class EditChangeSet
         {
             StageFile(pending);
         }
+
+        foreach (var change in snapshot.WorkspaceModuleChanges)
+        {
+            _workspaceModuleChanges[change.FolderPath] = change;
+        }
     }
 
     internal void Clear()
@@ -159,7 +203,10 @@ public sealed class EditChangeSet
         _dirtyTables.Clear();
         _dirtyModuleMetadata.Clear();
         _pendingFiles.Clear();
+        _workspaceModuleChanges.Clear();
     }
+
+    internal void ClearWorkspaceChanges() => _workspaceModuleChanges.Clear();
 
     private static PendingFileWrite Clone(PendingFileWrite pending)
         => pending with { Contents = pending.Contents.ToArray() };

@@ -2,7 +2,7 @@
 
 Planet Designer edits the material appearance of landable planets. Its renderer reproduces the LE1 result with almost perfect visual accuracy, making it suitable for confident appearance authoring before an in-game check.
 
-[IMAGE: Planet Designer showing the Planets and Personal Templates tree, 16:9 preview and Material Parameters pane]
+![Planet Designer showing the Planets and Personal Templates tree, live preview and Material Parameters panes](docs/images/planet-designer.png)
 
 ## Open Planet Designer
 
@@ -28,11 +28,9 @@ The planet tree groups rows by module, Cluster and System. Its search checks mod
 
 Planet Designer has two stages of editing:
 
-1. Material controls change the Designer's private draft and preview.
+1. **Material Parameters**, **Copy/Paste Appearance**, and **Randomise** change the Designer's private draft and preview.
 2. **Apply appearance** adds that draft to the shared, undoable workspace changes.
 3. The main-window **Commit** writes the change to the module files.
-
-[IMAGE: Apply appearance beside the Designer Undo and Redo controls, with the main-window Commit control visible behind it]
 
 Closing the Designer or switching planets with an unapplied draft offers **Apply**, **Discard** and **Cancel**.
 
@@ -75,7 +73,7 @@ The editor stages the image under the module's `textures` folder and records the
 
 The packed colour picker accepts `#AARRGGBB` or ARGB channel values from 0–255. Cancelling either colour picker restores the value it had when the picker opened.
 
-[IMAGE: HDR and packed ARGB colour pickers open beside their Material Parameters controls]
+![HDR and packed ARGB colour picker](docs/images/colour-picker.png)
 
 ## Preview controls
 
@@ -91,7 +89,7 @@ The packed colour picker accepts `#AARRGGBB` or ARGB channel values from 0–255
 
 The preview uses a fixed camera that matches the in-game view. It does not pan, rotate or zoom.
 
-[IMAGE: Planet preview toolbar showing Lighting, Post Processing, Corona, Stars, 60fps Mode, Cloud speed and Reset clouds]
+![Planet preview toolbar showing Lighting, Post Processing, Corona, Stars, 60fps Mode, Cloud speed and Reset clouds](docs/images/live-preview-toolbar.png)
 
 ## Preview textures and rendering
 
@@ -109,17 +107,19 @@ This is an internal application clipboard rather than the Windows clipboard. Pas
 
 Switching the selected planet does not copy appearance by itself.
 
+![Copy and paste appearance options in the planets pane](docs/images/copy-paste-appearance.png)
+
 ## Randomise appearance
 
-Choose **Randomise** between **Close** and **Apply appearance** to create a guarded variation of a BASEGAME planet material. The randomiser inherits coupled material blocks from a deduplicated vanilla appearance, then coherently varies non-zero scalar and derived-energy values by up to 35%. Land topology receives a smaller bounded variation, while related colours share a hue transformation and remain inside conservative HDR energy limits. It preserves the current planet's Shader name and updates only the private Designer draft until **Apply appearance** is chosen.
+Choose **Randomise** to create a guarded variation of a BASEGAME planet material. This 
 
-The status bar identifies the donor planet and generation seed. Clicking **Randomise** again creates another draft; closing or switching planets still offers the normal Apply, Discard and Cancel choices.
+The status bar identifies the donor planet and generation seed. The system is designed to pick a basegame planet and then randomise various aspects of its appearance with a roughly 35% variation. This allows them to maintain consistency with vanilla while providing you with interesting variations to base more extensive edits on.
 
-Linked custom Planet textures from mounted modules participate in randomisation. Each texture is considered only for the material categories selected when it was linked, and each compatible texture slot has a 35% chance to use a custom option when one is available. The status bar reports when linked textures were selected.
+Linked custom Planet textures from mounted modules participate in randomisation. Each texture is considered only for the material categories selected when it was linked, and each compatible texture slot has a 35% chance to use a custom option when one is available.
 
-Choose **Manage textures...** below Identity to inspect linked textures, their module, categories, availability and current Planet-row reference count. **Unlink selected** removes the relationship from writable module metadata and immediately removes it from randomisation and selectable dropdown options. A field that currently stores the unlinked reference keeps showing that raw value until it is changed, so the Designer never conceals CSV data. Unlinking does not rewrite existing Planet CSV references or delete an already committed preview file.
+Choose **Manage textures...** below Identity to inspect linked textures, their module, categories, availability and current Planet-row reference count. **Unlink selected** removes the relationship from writable module metadata and immediately removes it from randomisation and selectable dropdown options.
 
-When a linked preview file is missing and no staged copy is available, the Designer marks the relationship unavailable and excludes it from dropdowns and randomisation. Use **Manage textures...** to unlink the stale relationship or relink the same in-memory path to a replacement preview image.
+When a linked texture is missing and no staged copy is available, the Designer marks the relationship unavailable and excludes it from dropdowns and randomisation. Use **Manage textures...** to unlink the stale relationship or relink the same in-memory path to a replacement preview image.
 
 ## Personal templates
 
@@ -129,7 +129,7 @@ Templates save appearance settings without the Shader name. This prevents two pl
 
 Apply a template by double-clicking it or selecting **Use**. Deleting a personal template is immediate and has no confirmation prompt.
 
-[IMAGE: Personal Templates list with a saved template and its Use and Delete controls]
+![Personal Templates list with a saved template and its Use and Delete controls]](docs/images/personal-templates.png)
 
 Personal templates are stored in `%LocalAppData%\LE1GalaxyMapEditor\PlanetTemplates`.
 

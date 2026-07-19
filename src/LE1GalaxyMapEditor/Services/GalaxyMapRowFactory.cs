@@ -29,11 +29,17 @@ public sealed partial class GalaxyMapRowFactory
         _allocator = new ModuleIdAllocator(workspace);
     }
 
-    public Cluster CreateCluster(string? nameText = null, double x = 0.5, double y = 0.5)
+    public Cluster CreateCluster(
+        string? nameText = null,
+        double x = 0.5,
+        double y = 0.5,
+        string? label = null)
     {
         var layer = RequireActiveLayer();
         var rowId = _allocator.NextAvailable(layer.Module, GalaxyMapTable.Cluster);
-        var labelNumber = NextClusterLabelNumber(rowId);
+        var labelNumber = string.IsNullOrWhiteSpace(label)
+            ? NextClusterLabelNumber(rowId)
+            : ValidateNewClusterLabel(label);
         var row = new Cluster
         {
             RowId = rowId,
@@ -139,7 +145,10 @@ public sealed partial class GalaxyMapRowFactory
         }
 
         var value = ((long)clusterNumber * 10_000) + ((long)systemNumber * 100) + planetNumber;
-        if (value is < int.MinValue or > int.MaxValue)
+        if (clusterNumber is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel ||
+            systemNumber is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
+            planetNumber is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel ||
+            value is <= 0 or > GalaxyMapIdentityLimits.MaxActiveWorld)
         {
             return false;
         }
@@ -211,17 +220,22 @@ public sealed partial class GalaxyMapRowFactory
     private int NextClusterLabelNumber(int preferredRowId)
     {
         var used = LabelNumbers(
-            _workspace.EffectiveDocument.Clusters.Select(cluster => cluster.Label), "Cluster");
-        if (preferredRowId > 0 && !used.Contains(preferredRowId))
+            _workspace.Layers.SelectMany(layer => layer.Clusters).Select(cluster => cluster.Label), "Cluster");
+        if (preferredRowId is >= GalaxyMapIdentityLimits.MinAuthoredClusterLabel and <= GalaxyMapIdentityLimits.MaxClusterLabel &&
+            !used.Contains(preferredRowId))
         {
             return preferredRowId;
         }
 
-        return NextAfterMaximum(used);
+        return NextAvailable(
+            used,
+            GalaxyMapIdentityLimits.MinAuthoredClusterLabel,
+            GalaxyMapIdentityLimits.MaxClusterLabel,
+            "Cluster");
     }
 
     private static int NextScopedLabelNumber(IEnumerable<string> labels, string prefix)
-        => NextAfterMaximum(LabelNumbers(labels, prefix));
+        => NextAvailable(LabelNumbers(labels, prefix), 1, GalaxyMapIdentityLimits.MaxLabel(prefix), prefix);
 
     private static HashSet<int> LabelNumbers(IEnumerable<string> labels, string prefix)
     {
@@ -237,20 +251,32 @@ public sealed partial class GalaxyMapRowFactory
         return used;
     }
 
-    private static int NextAfterMaximum(IReadOnlyCollection<int> used)
+    private int ValidateNewClusterLabel(string label)
     {
-        if (used.Count == 0)
+        if (!TryLabelNumber(label.Trim(), "Cluster", out var number) ||
+            number is < GalaxyMapIdentityLimits.MinAuthoredClusterLabel or > GalaxyMapIdentityLimits.MaxClusterLabel)
         {
-            return 1;
+            throw new InvalidOperationException("New module Clusters must use a label from Cluster22 to Cluster99.");
         }
-
-        var maximum = used.Max();
-        if (maximum == int.MaxValue)
+        if (_workspace.Layers.SelectMany(layer => layer.Clusters).Any(cluster =>
+                TryLabelNumber(cluster.Label, "Cluster", out var existing) && existing == number))
         {
-            throw new InvalidOperationException("No further numeric labels can be generated in this scope.");
+            throw new InvalidOperationException($"Cluster{number:D2} is already used by a mounted module.");
         }
+        return number;
+    }
 
-        return maximum + 1;
+    private static int NextAvailable(IReadOnlySet<int> used, int minimum, int maximum, string prefix)
+    {
+        for (var candidate = minimum; candidate <= maximum; candidate++)
+        {
+            if (!used.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+        throw new InvalidOperationException(
+            $"No {prefix} label is available in the supported {prefix}{minimum:D2}-{prefix}{maximum:D2} range.");
     }
 
     private static bool TryLabelNumber(string label, string prefix, out int number)

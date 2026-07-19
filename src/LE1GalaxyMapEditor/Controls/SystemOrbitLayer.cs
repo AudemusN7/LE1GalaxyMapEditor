@@ -8,6 +8,10 @@ namespace LE1GalaxyMapEditor.Controls;
 
 public sealed class SystemOrbitLayer : FrameworkElement
 {
+    private static readonly Pen AsteroidGuidePen = CreatePen(Color.FromArgb(42, 0xCC, 0xB7, 0x91), 1);
+    private static readonly Brush AsteroidBrush = CreateBrush(Color.FromArgb(185, 0xCC, 0xB7, 0x91));
+    private static readonly Brush AsteroidHighlightBrush = CreateBrush(Color.FromArgb(235, 0xE8, 0xD8, 0xB8));
+
     public static readonly DependencyProperty PlanetsProperty = DependencyProperty.Register(
         nameof(Planets), typeof(IEnumerable), typeof(SystemOrbitLayer),
         new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
@@ -71,17 +75,7 @@ public sealed class SystemOrbitLayer : FrameworkElement
     {
         // Belt particles retain their original neutral sandstone colour. Only
         // the triangular anchor marker is provenance-coloured in SystemView.
-        var beltColor = Color.FromRgb(0xCC, 0xB7, 0x91);
-        var highlightColor = Color.FromRgb(0xE8, 0xD8, 0xB8);
-        var guidePen = new Pen(
-            new SolidColorBrush(Color.FromArgb(42, beltColor.R, beltColor.G, beltColor.B)),
-            1);
-        drawingContext.DrawEllipse(null, guidePen, centre, radius, radius);
-
-        var asteroidBrush = new SolidColorBrush(
-            Color.FromArgb(185, beltColor.R, beltColor.G, beltColor.B));
-        var highlightBrush = new SolidColorBrush(
-            Color.FromArgb(235, highlightColor.R, highlightColor.G, highlightColor.B));
+        drawingContext.DrawEllipse(null, AsteroidGuidePen, centre, radius, radius);
         var count = Math.Clamp((int)(2 * Math.PI * radius / 8), 42, 150);
         var state = unchecked((uint)(seed * 747796405 + 2891336453));
 
@@ -99,10 +93,29 @@ public sealed class SystemOrbitLayer : FrameworkElement
             var point = new Point(
                 centre.X + (Math.Cos(angle) * asteroidRadius),
                 centre.Y + (Math.Sin(angle) * asteroidRadius));
-            drawingContext.DrawEllipse(index % 7 == 0 ? highlightBrush : asteroidBrush, null, point, size, size * 0.75);
+            drawingContext.DrawEllipse(
+                index % 7 == 0 ? AsteroidHighlightBrush : AsteroidBrush,
+                null,
+                point,
+                size,
+                size * 0.75);
         }
     }
 
     private static Color GetModuleColor(GalaxyMapRow row)
         => ModuleColorPalette.GetColor(row.Origin?.Color ?? ModuleColor.BaseGameBlue);
+
+    private static Brush CreateBrush(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
+    private static Pen CreatePen(Color color, double thickness)
+    {
+        var pen = new Pen(CreateBrush(color), thickness);
+        pen.Freeze();
+        return pen;
+    }
 }

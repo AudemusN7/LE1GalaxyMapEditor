@@ -2,7 +2,7 @@
 
 The workspace lets you view BASEGAME and several mod modules together while keeping their files separate.
 
-[IMAGE: Module bar showing BASEGAME, mounted modules, priorities, the active-module pen and an amber uncommitted-change dot]
+![Module bar showing BASEGAME, mounted modules, priorities, the active-module pen and an amber uncommitted-change dot](docs/images/module-pane.png)
 
 ## Key terms
 
@@ -23,9 +23,11 @@ Set each module's priority to match its DLC mount number. Use unique priorities 
 
 The active module and the highest-priority module are separate concepts. Making a module active does not move it above other modules.
 
-[IMAGE: Two module versions of one row with the module-instance tabs visible in Properties]
+![Two module versions of one row with the module-instance tabs visible in Properties](docs/images/module-instances-a.png)
 
 If two modules edit the same instance, it will display `≋` in the hierarchy. Use the module-instance tabs at the top of **PROPERTIES** to compare them.
+
+![Two module versions of one row visible in Hierarchy](docs/images/module-instances-b.png)
 
 ## Module indicators
 
@@ -79,7 +81,7 @@ The destination depends on the row and editor surface:
 
 The editor creates a complete same-ID row in the chosen module. The lower source row remains unchanged.
 
-[IMAGE: Choose edit module window showing writable module names, tags and priorities]
+![Choose edit module window showing writable module names, tags and priorities](docs/images/choose-edit-module.png)
 
 ## Shared uncommitted changes
 
@@ -98,7 +100,7 @@ Example: If you move the position of an object on the map, it will appear as `Co
 
 Choosing **Commit** opens a fixed-size review window before anything is written. It lists changed CSV fields with their committed and staged values, identifies new or deleted rows, and includes module metadata and staged resource files. New rows are kept compact, showing their internal name and tree relationship rather than every added field. Long lists scroll within the window. Choose **Commit changes** to continue or **Cancel** to leave every change staged.
 
-[IMAGE: Undo, Redo, Discard and Commit controls with uncommitted changes present]
+![Undo, Redo, Discard and Commit controls with uncommitted changes present](docs/images/undo-redo-discard-commit.png]
 
 Undo and Redo history is shared and limited. It is cleared after Commit, Discard, Refresh or Unlink Module.
 
@@ -114,7 +116,9 @@ Closing the application with uncommitted changes offers **Commit**, **Discard** 
 
 **Refresh** reloads the workspace modules from disk. If you have uncommitted changes, the editor asks before removing them.
 
-**Unlink Module** removes a module from this workspace. It does not delete the module folder or its files. Any uncommitted changes for that module are discarded and the shared Undo/Redo history is cleared.
+**Open Module** and **Unlink Module** update the live module stack immediately, but the corresponding addition or removal from `workspace.json` remains staged until **Commit**. The Review changes window lists these workspace additions and removals. Cancelling the review leaves them staged, while **Discard** restores the remembered module stack.
+
+**Unlink Module** never deletes the module folder or its files. Any other uncommitted changes for that module are discarded and the shared Undo/Redo history is cleared.
 
 Deleting an override has a similar layering effect as unlinking a module: the lower-priority version becomes visible again rather than being deleted.
 

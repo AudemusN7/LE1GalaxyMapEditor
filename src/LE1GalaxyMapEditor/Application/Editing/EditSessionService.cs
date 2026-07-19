@@ -64,6 +64,12 @@ public sealed class EditSessionService
     public void RemoveModuleChanges(string moduleTag)
         => _session.Changes.RemoveModule(moduleTag);
 
+    public void StageWorkspaceModuleAdded(GalaxyMapModule module)
+        => _session.Changes.StageWorkspaceModuleAdded(module);
+
+    public void StageWorkspaceModuleRemoved(GalaxyMapModule module)
+        => _session.Changes.StageWorkspaceModuleRemoved(module);
+
     public void MigrateModuleTag(string oldTag, string newTag)
         => _session.Changes.MigrateModuleTag(oldTag, newTag);
 
@@ -330,7 +336,8 @@ public sealed class EditSessionService
         }
 
         var workspacePersistenceFailed = false;
-        if (completedModuleTags.Count > 0 && persistWorkspace is not null)
+        var hasWorkspaceChanges = _session.Changes.HasWorkspaceChanges;
+        if ((completedModuleTags.Count > 0 || hasWorkspaceChanges) && persistWorkspace is not null)
         {
             try
             {
@@ -352,6 +359,10 @@ public sealed class EditSessionService
             foreach (var tag in completedModuleTags)
             {
                 _session.Changes.ClearModule(tag);
+            }
+            if (hasWorkspaceChanges)
+            {
+                _session.Changes.ClearWorkspaceChanges();
             }
         }
 

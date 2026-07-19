@@ -53,6 +53,11 @@ public sealed record PlanetShaderNameRequest(
     string SuggestedName,
     Func<string, string?> Validate);
 
+public sealed record ClusterLabelRequest(
+    string SuggestedLabel,
+    IReadOnlyList<string> MountedLabels,
+    Func<string, string?> Validate);
+
 public sealed record CloneContentRequest(
     int RowId,
     string Label,
@@ -81,6 +86,7 @@ public interface IEditorDialogs
         IReadOnlyList<GalaxyMapModule> candidates,
         GalaxyMapModule? activeModule);
     string? ChoosePlanetShaderName(PlanetShaderNameRequest request);
+    string? ChooseClusterLabel(ClusterLabelRequest request);
     string? PickClusterTexture();
     LandableDestinationRequest? ConfigureLandableDestination(LandableDestinationDefaults defaults);
     MoveDestinationOption? ChooseMoveDestination(

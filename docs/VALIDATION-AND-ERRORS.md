@@ -2,7 +2,7 @@
 
 The editor reports problems close to where they occur and also maintains a workspace-wide diagnostic list.
 
-[IMAGE: Main window showing an invalid field, operational error banner and open Validation Diagnostics panel]
+![Main window showing open Validation Diagnostics panel](docs/images/validation-diagnostics.png)
 
 ## Three kinds of feedback
 
@@ -23,8 +23,6 @@ Dismissing the red banner does not remove entries from **VALIDATION DIAGNOSTICS*
 | Info | Accent/cyan | Useful context that may not require a change. |
 
 The footer summarises current errors and warnings. Open the panel to see each diagnostic code, message and location.
-
-[IMAGE: Validation footer and panel showing Error, Warning and Info entries with their colours]
 
 ## Use the diagnostics panel
 
@@ -63,7 +61,7 @@ Invalid inspector fields and 2DA cells receive a red border and explanatory tool
 
 An invalid edit does not create an Undo entry.
 
-[IMAGE: Invalid Properties field and invalid 2DA cell with their red borders and tooltips]
+![Invalid Properties field and invalid 2DA cell with their red borders and tooltips](docs/images/property-error.png)
 
 ## Diagnostics and Commit
 
@@ -86,7 +84,7 @@ If a later file fails, earlier files may already have been written successfully.
 
 Undo/Redo history is cleared after a partially successful Commit because some changes are already on disk.
 
-[IMAGE: Commit error banner with one module still showing uncommitted changes ready to retry]
+![Commit error banner with one module still showing uncommitted changes ready to retry](docs/images/error-banner.png)
 
 ## Common warnings
 

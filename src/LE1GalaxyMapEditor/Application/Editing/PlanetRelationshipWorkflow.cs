@@ -23,7 +23,7 @@ public sealed class PlanetRelationshipWorkflow(EditorSession session, EditSessio
 
         session.Workspace.SetActiveModule(target);
         var layer = session.Workspace.ActiveLayer!;
-        var plot = CreatePlotPlanetRow(layer, planet);
+        var plot = GalaxyMapRowAuthoring.CreatePlotPlanetRow(layer, planet);
         return edits.ExecuteMutation(new EditMutationRequest(
             [plot.Key],
             [GalaxyMapTable.PlotPlanet],
@@ -84,16 +84,16 @@ public sealed class PlanetRelationshipWorkflow(EditorSession session, EditSessio
 
             map.MapName = request.MapName;
             map.StartPoint = request.StartPoint;
-            DirtyColumns(map, "Map", "StartPoint");
+            GalaxyMapRowAuthoring.MarkDirty(map, "Map", "StartPoint");
             planetOverride.MapRowId = map.RowId;
             planetOverride.Event = request.Event;
             planetOverride.ButtonLabel = request.ButtonLabel;
-            DirtyColumns(planetOverride, "Map", "Event", "ButtonLabel");
+            GalaxyMapRowAuthoring.MarkDirty(planetOverride, "Map", "Event", "ButtonLabel");
 
             PlotPlanetEntry? plot = null;
             if (request.AddPlotPlanet && planet.PlotPlanet is null)
             {
-                plot = CreatePlotPlanetRow(layer, planetOverride);
+                plot = GalaxyMapRowAuthoring.CreatePlotPlanetRow(layer, planetOverride);
             }
 
             var affected = new List<GalaxyMapRowKey> { planet.Key, map.Key };
@@ -242,37 +242,4 @@ public sealed class PlanetRelationshipWorkflow(EditorSession session, EditSessio
             layer.Find(row.Key) is not null &&
             string.Equals(layer.Module.Tag, row.Origin?.ModuleTag, StringComparison.OrdinalIgnoreCase));
 
-    private static PlotPlanetEntry CreatePlotPlanetRow(GalaxyMapLayer layer, Planet planet)
-    {
-        var plot = new PlotPlanetEntry
-        {
-            RowId = planet.RowId,
-            Code = planet.ActiveWorld,
-            Name = planet.Name,
-            NameText = planet.NameText
-        };
-        GalaxyMapRowAuthoring.PrepareNewRow(layer, plot);
-        foreach (var column in new[]
-                 {
-                     "VisibleConditional", "VisibleFunction", "VisibleParameter",
-                     "UsableConditional", "UsableFunction", "UsableParameter"
-                 })
-        {
-            if (planet.ExtraFields.TryGetValue(column, out var value))
-            {
-                plot.SetExtraField(column, value);
-            }
-        }
-
-        return plot;
-    }
-
-    private static void DirtyColumns(GalaxyMapRow row, params string[] columns)
-    {
-        var snapshot = GalaxyMapRowAuthoring.EnsureSnapshot(row);
-        foreach (var column in columns)
-        {
-            snapshot.MarkDirty(column);
-        }
-    }
 }

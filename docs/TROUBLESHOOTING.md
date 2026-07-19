@@ -4,8 +4,6 @@ Most launch and editing problems come from an incomplete extraction, a missing r
 
 If you spot any other issues, please let me know either with a Discord DM or by opening an Issue here on Github.
 
-[IMAGE: Startup error message showing the saved log location]
-
 ## The application does not start
 
 ### Install .NET 10
@@ -20,7 +18,7 @@ Do not move the executable out of the extracted folder by itself. It needs the a
 
 If the error mentions missing BASEGAME data or `resources\data`, extract a fresh copy of the complete release archive.
 
-[IMAGE: Correct extracted release layout showing the executable, rendering DLLs and resources folder]
+![Correct extracted release layout showing the executable, rendering DLLs and resources folder](docs/images/extracted-files.png)
 
 ## Find the startup log
 
@@ -48,8 +46,6 @@ Try the following:
 4. Relaunch the editor and reopen the required modules.
 
 Renaming/deleting the workspace file resets remembered mounts; it does not delete module files.
-
-[IMAGE: Missing remembered-module error while BASEGAME remains loaded]
 
 ## I cannot edit a row
 
@@ -103,8 +99,6 @@ Common causes include:
 Close other programs using the folder, correct the reported issue and choose **Commit** again.
 
 The editor protects each file update separately. If some files were saved before the failure, only the remaining unsaved changes stay on the module bar for retrying.
-
-[IMAGE: Commit error banner with the remaining module changes still available]
 
 ## Planet preview is unavailable
 

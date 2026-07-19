@@ -296,14 +296,14 @@ internal static class OptimizationRegressionTests
     private static void RelayAndActiveWorldEncodingBoundaries()
     {
         var document = new GalaxyMapDocument();
-        var huge = NewCluster(1, "Cluster214748", "Largest Relay-safe Cluster");
+        var huge = NewCluster(1, "Cluster100", "Unsupported Cluster");
         var ordinary = NewCluster(2, "Cluster01", "Ordinary Cluster");
         document.Clusters.Add(huge);
         document.Clusters.Add(ordinary);
         document.Systems.Add(new GalaxySystem
         {
             RowId = 1,
-            Label = "System99",
+            Label = "System10",
             ClusterRowId = huge.RowId,
             NameText = "Boundary System",
             Scale = 1
@@ -311,7 +311,7 @@ internal static class OptimizationRegressionTests
         document.Planets.Add(new Planet
         {
             RowId = 1,
-            Label = "Planet99",
+            Label = "Planet100",
             SystemRowId = 1,
             NameText = "Overflowing ActiveWorld",
             ActiveWorld = 0,
@@ -323,14 +323,14 @@ internal static class OptimizationRegressionTests
         document.Relays.Add(new RelayConnection
         {
             RowId = 1,
-            StartClusterEncoded = 2_147_480_000,
+            StartClusterEncoded = 1_000_000,
             EndClusterEncoded = 10_000
         });
         document.Relays.Add(new RelayConnection
         {
             RowId = 2,
             StartClusterEncoded = 10_000,
-            EndClusterEncoded = 2_147_480_000
+            EndClusterEncoded = 1_000_000
         });
         document.Relays.Add(new RelayConnection
         {
@@ -340,16 +340,19 @@ internal static class OptimizationRegressionTests
         });
         document.RebuildRelationships();
 
-        True(document.TryGetRelayCode(huge, out var boundaryCode, out var error),
-            $"largest Relay-safe label encodes: {error}");
-        Equal(2_147_480_000, boundaryCode, "largest Relay-safe code");
+        True(!document.TryGetRelayCode(huge, out _, out _),
+            "Cluster100 is rejected as a Relay endpoint");
         True(document.TryGetRelayCode(ordinary, out var ordinaryCode, out var ordinaryError),
             $"ordinary Relay label encodes: {ordinaryError}");
         Equal(10_000, ordinaryCode, "ordinary Relay code");
 
         var diagnostics = new GalaxyMapValidator().Validate(document);
-        Equal(1, diagnostics.Count(item => item.Code == "ACTIVEWORLD-RANGE" && item.RowId == 1),
-            "ActiveWorld overflow is diagnosed before integer arithmetic wraps");
+        Equal(1, diagnostics.Count(item => item.Code == "LABEL-CLUSTER-RANGE" && item.RowId == 1),
+            "Cluster100 is diagnosed as outside the game-supported range");
+        Equal(1, diagnostics.Count(item => item.Code == "LABEL-SYSTEM-RANGE" && item.RowId == 1),
+            "System10 is diagnosed as outside the game-supported range");
+        Equal(1, diagnostics.Count(item => item.Code == "LABEL-PLANET-RANGE" && item.RowId == 1),
+            "Planet100 is diagnosed as outside the game-supported range");
         Equal(1, diagnostics.Count(item => item.Code == "RELAY-DUPLICATE-PAIR" && item.RowId == 2),
             "reversed Relay pair is diagnosed once");
         Equal(1, diagnostics.Count(item => item.Code == "RELAY-ENCODING" && item.RowId == 3),

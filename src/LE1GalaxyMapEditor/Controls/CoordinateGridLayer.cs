@@ -19,6 +19,15 @@ public sealed class CoordinateGridLayer : FrameworkElement
 
     public static IReadOnlyList<string> LeftAxisLabels { get; } = AxisLabels.Take(AxisLabels.Count - 1).ToArray();
 
+    private static readonly Brush LabelBrush = CreateBrush(Color.FromRgb(218, 239, 247));
+    private static readonly Brush LabelBackground = CreateBrush(Color.FromArgb(185, 5, 13, 20));
+    private static readonly Pen MinorGridPen = CreatePen(Color.FromArgb(45, 144, 211, 232), 0.75);
+    private static readonly Pen MajorGridPen = CreatePen(Color.FromArgb(112, 144, 211, 232), 1);
+    private static readonly Pen BorderPen = CreatePen(Color.FromArgb(185, 170, 229, 246), 1.5);
+    private static readonly Pen CursorBorderPen = CreatePen(Color.FromArgb(185, 170, 229, 246), 1);
+    private static readonly Typeface AxisTypeface = new("Segoe UI");
+    private static readonly Typeface CursorTypeface = new("Consolas");
+
     private Point? _cursorPosition;
 
     public static readonly DependencyProperty ShowGridProperty = DependencyProperty.Register(
@@ -91,24 +100,6 @@ public sealed class CoordinateGridLayer : FrameworkElement
             return;
         }
 
-        var minorGridBrush = new SolidColorBrush(Color.FromArgb(45, 144, 211, 232));
-        var majorGridBrush = new SolidColorBrush(Color.FromArgb(112, 144, 211, 232));
-        var borderBrush = new SolidColorBrush(Color.FromArgb(185, 170, 229, 246));
-        var labelBrush = new SolidColorBrush(Color.FromRgb(218, 239, 247));
-        var labelBackground = new SolidColorBrush(Color.FromArgb(185, 5, 13, 20));
-        minorGridBrush.Freeze();
-        majorGridBrush.Freeze();
-        borderBrush.Freeze();
-        labelBrush.Freeze();
-        labelBackground.Freeze();
-
-        var minorGridPen = new Pen(minorGridBrush, 0.75);
-        var majorGridPen = new Pen(majorGridBrush, 1);
-        var borderPen = new Pen(borderBrush, 1.5);
-        minorGridPen.Freeze();
-        majorGridPen.Freeze();
-        borderPen.Freeze();
-
         if (ShowGrid)
         {
             for (var index = 0; index <= DivisionCount; index++)
@@ -117,8 +108,8 @@ public sealed class CoordinateGridLayer : FrameworkElement
                 var x = PixelAligned(fraction * ActualWidth, ActualWidth);
                 var y = PixelAligned(fraction * ActualHeight, ActualHeight);
                 var pen = index is 0 or DivisionCount
-                    ? borderPen
-                    : index % MajorDivisionInterval == 0 ? majorGridPen : minorGridPen;
+                    ? BorderPen
+                    : index % MajorDivisionInterval == 0 ? MajorGridPen : MinorGridPen;
                 drawingContext.DrawLine(pen, new Point(x, 0), new Point(x, ActualHeight));
                 drawingContext.DrawLine(pen, new Point(0, y), new Point(ActualWidth, y));
             }
@@ -131,9 +122,9 @@ public sealed class CoordinateGridLayer : FrameworkElement
                     text,
                     CultureInfo.InvariantCulture,
                     FlowDirection.LeftToRight,
-                    new Typeface("Segoe UI"),
+                    AxisTypeface,
                     10,
-                    labelBrush,
+                    LabelBrush,
                     pixelsPerDip);
 
                 var fraction = labelIndex * MajorIncrement;
@@ -143,12 +134,12 @@ public sealed class CoordinateGridLayer : FrameworkElement
                 if (labelIndex > 0)
                 {
                     var xLabelTop = ActualHeight - formatted.Height - 3;
-                    DrawLabel(drawingContext, formatted, new Point(x, xLabelTop), labelBackground);
+                    DrawLabel(drawingContext, formatted, new Point(x, xLabelTop), LabelBackground);
                 }
 
                 if (labelIndex < AxisLabels.Count - 1)
                 {
-                    DrawLabel(drawingContext, formatted, new Point(3, y), labelBackground);
+                    DrawLabel(drawingContext, formatted, new Point(3, y), LabelBackground);
                 }
             }
         }
@@ -158,9 +149,9 @@ public sealed class CoordinateGridLayer : FrameworkElement
             DrawCursorCoordinates(
                 drawingContext,
                 cursorPosition,
-                labelBrush,
-                labelBackground,
-                borderBrush,
+                LabelBrush,
+                LabelBackground,
+                CursorBorderPen,
                 VisualTreeHelper.GetDpi(this).PixelsPerDip);
         }
     }
@@ -170,7 +161,7 @@ public sealed class CoordinateGridLayer : FrameworkElement
         Point cursorPosition,
         Brush foreground,
         Brush background,
-        Brush border,
+        Pen border,
         double pixelsPerDip)
     {
         var normalizedPosition = NormalizePosition(cursorPosition, new Size(ActualWidth, ActualHeight));
@@ -178,7 +169,7 @@ public sealed class CoordinateGridLayer : FrameworkElement
             FormatCoordinates(normalizedPosition),
             CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
-            new Typeface("Consolas"),
+            CursorTypeface,
             11,
             foreground,
             pixelsPerDip);
@@ -206,9 +197,7 @@ public sealed class CoordinateGridLayer : FrameworkElement
         top = ClampToSurface(top, height, ActualHeight, edgePadding);
 
         var rect = new Rect(left, top, width, height);
-        var borderPen = new Pen(border, 1);
-        borderPen.Freeze();
-        drawingContext.DrawRoundedRectangle(background, borderPen, rect, 3, 3);
+        drawingContext.DrawRoundedRectangle(background, border, rect, 3, 3);
         drawingContext.DrawText(
             formatted,
             new Point(left + horizontalPadding, top + verticalPadding));
@@ -237,5 +226,19 @@ public sealed class CoordinateGridLayer : FrameworkElement
     {
         var maximum = Math.Max(padding, surfaceExtent - extent - padding);
         return Math.Clamp(value, padding, maximum);
+    }
+
+    private static Brush CreateBrush(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
+    private static Pen CreatePen(Color color, double thickness)
+    {
+        var pen = new Pen(CreateBrush(color), thickness);
+        pen.Freeze();
+        return pen;
     }
 }

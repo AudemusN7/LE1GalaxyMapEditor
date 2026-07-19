@@ -192,7 +192,7 @@ public sealed class PlanetAppearanceFieldViewModel : ObservableObject
         if (IsTexture && !string.IsNullOrWhiteSpace(Primary.Value) &&
             !TextureOptions.Contains(Primary.Value, StringComparer.OrdinalIgnoreCase))
         {
-            TextureOptions.Add(Primary.Value);
+            TextureOptions.Add(Primary.RawValue);
         }
 
         foreach (var component in Components)
@@ -221,11 +221,47 @@ public sealed class PlanetAppearanceFieldViewModel : ObservableObject
             .Select(PlanetAppearanceCodec.TextureDisplayName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        TextureOptions.Clear();
+
+        // Keep the currently displayed value present throughout synchronization.
+        // Clearing a collection bound to an editable ComboBox transiently clears
+        // its Text binding and writes an empty texture reference into the draft.
         foreach (var option in options)
         {
-            TextureOptions.Add(option);
+            if (!TextureOptions.Contains(option, StringComparer.OrdinalIgnoreCase))
+            {
+                TextureOptions.Add(option);
+            }
         }
+
+        for (var index = TextureOptions.Count - 1; index >= 0; index--)
+        {
+            if (!options.Contains(TextureOptions[index], StringComparer.OrdinalIgnoreCase))
+            {
+                TextureOptions.RemoveAt(index);
+            }
+        }
+
+        for (var targetIndex = 0; targetIndex < options.Length; targetIndex++)
+        {
+            var currentIndex = IndexOf(TextureOptions, options[targetIndex]);
+            if (currentIndex != targetIndex)
+            {
+                TextureOptions.Move(currentIndex, targetIndex);
+            }
+        }
+    }
+
+    private static int IndexOf(IReadOnlyList<string> values, string target)
+    {
+        for (var index = 0; index < values.Count; index++)
+        {
+            if (string.Equals(values[index], target, StringComparison.OrdinalIgnoreCase))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private double[] GetColorValues()
