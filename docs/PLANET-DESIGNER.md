@@ -2,7 +2,7 @@
 
 Planet Designer edits the material appearance of landable planets. Its renderer reproduces the LE1 result with almost perfect visual accuracy, making it suitable for confident appearance authoring before an in-game check.
 
-![Planet Designer showing the Planets and Personal Templates tree, live preview and Material Parameters panes](docs/images/planet-designer.png)
+![Planet Designer showing the Planets and Personal Templates tree, live preview and Material Parameters panes](images/planet-designer.png)
 
 ## Open Planet Designer
 
@@ -73,7 +73,7 @@ The editor stages the image under the module's `textures` folder and records the
 
 The packed colour picker accepts `#AARRGGBB` or ARGB channel values from 0–255. Cancelling either colour picker restores the value it had when the picker opened.
 
-![HDR and packed ARGB colour picker](docs/images/colour-picker.png)
+![HDR and packed ARGB colour picker](images/colour-picker.png)
 
 ## Preview controls
 
@@ -89,7 +89,7 @@ The packed colour picker accepts `#AARRGGBB` or ARGB channel values from 0–255
 
 The preview uses a fixed camera that matches the in-game view. It does not pan, rotate or zoom.
 
-![Planet preview toolbar showing Lighting, Post Processing, Corona, Stars, 60fps Mode, Cloud speed and Reset clouds](docs/images/live-preview-toolbar.png)
+![Planet preview toolbar showing Lighting, Post Processing, Corona, Stars, 60fps Mode, Cloud speed and Reset clouds](images/live-preview-toolbar.png)
 
 ## Preview textures and rendering
 
@@ -107,7 +107,7 @@ This is an internal application clipboard rather than the Windows clipboard. Pas
 
 Switching the selected planet does not copy appearance by itself.
 
-![Copy and paste appearance options in the planets pane](docs/images/copy-paste-appearance.png)
+![Copy and paste appearance options in the planets pane](images/copy-paste-appearance.png)
 
 ## Randomise appearance
 
@@ -129,7 +129,7 @@ Templates save appearance settings without the Shader name. This prevents two pl
 
 Apply a template by double-clicking it or selecting **Use**. Deleting a personal template is immediate and has no confirmation prompt.
 
-![Personal Templates list with a saved template and its Use and Delete controls]](docs/images/personal-templates.png)
+![Personal Templates list with a saved template and its Use and Delete controls](images/personal-templates.png)
 
 Personal templates are stored in `%LocalAppData%\LE1GalaxyMapEditor\PlanetTemplates`.
 

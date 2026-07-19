@@ -18,7 +18,7 @@ Do not move the executable out of the extracted folder by itself. It needs the a
 
 If the error mentions missing BASEGAME data or `resources\data`, extract a fresh copy of the complete release archive.
 
-![Correct extracted release layout showing the executable, rendering DLLs and resources folder](docs/images/extracted-files.png)
+![Correct extracted release layout showing the executable, rendering DLLs and resources folder](images/extracted-files.png)
 
 ## Find the startup log
 

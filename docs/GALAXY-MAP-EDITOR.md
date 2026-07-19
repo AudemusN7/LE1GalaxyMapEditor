@@ -2,7 +2,7 @@
 
 The Galaxy Map Editor is the main visual workspace. It keeps the **HIERARCHY**, **MAP CANVAS** and **PROPERTIES** panes synchronised as you navigate.
 
-![Main Galaxy Map Editor with the Hierarchy, map, Properties pane, breadcrumbs and module bar](docs/images/main-window.png)
+![Main Galaxy Map Editor with the Hierarchy, map, Properties pane, breadcrumbs and module bar](images/main-window.png)
 
 ## Navigate the map
 
@@ -31,7 +31,7 @@ This will also add a cursor widget that displays the X/Y coordinates of your cur
 
 The setting remains active as you move between map levels. Choose **Hide coordinate grid** to remove it. The cursor widget can also be independantly enabled by holding `Shift`.
 
-![Coordinate grid displayed over a System map with live mouse coordinate position]](docs/images/coordinate-grid.png)
+![Coordinate grid displayed over a System map with live mouse coordinate position](images/coordinate-grid.png)
 
 ## Add content
 
@@ -73,7 +73,7 @@ Landable planet templates can also create linked Map and PlotPlanet data, a Remo
 
 Generic and ringed planets can open in Planet Designer after creation. The planet will appear as black until an appearance has been applied to it.
 
-![Add system object window showing the five templates and landable-planet options](docs/images/add-system-object.png)
+![Add system object window showing the five templates and landable-planet options](images/add-system-object.png)
 
 ## Move a map marker
 
@@ -140,9 +140,9 @@ Inherited Relays cannot be broken because the partial table format has no verifi
 
 Example: Spectre Expansion Mod adds the Arcturus Stream cluster, so it redirects the BASEGAME relay connection from  `Local Cluster <--> Exodus Cluster` to `Local Cluster <--> Arcturus Stream` and then adds a new relay connection from `Arcturus Stream <--> Exodus Cluster`,
 
-![Main Galaxy view in Relay destination-selection mode with the instruction banner and red line](docs/images/relay-connection-a.png)
+![Main Galaxy view in Relay destination-selection mode with the instruction banner and red line](images/relay-connection-a.png)
 
-![Created new relay connection from Serpent Nebula to Pangaea Expanse](docs/images/relay-connection-b.png)
+![Created new relay connection from Serpent Nebula to Pangaea Expanse](images/relay-connection-b.png)
 
 ## Link a Cluster texture
 

@@ -2,7 +2,7 @@
 
 The workspace lets you view BASEGAME and several mod modules together while keeping their files separate.
 
-![Module bar showing BASEGAME, mounted modules, priorities, the active-module pen and an amber uncommitted-change dot](docs/images/module-pane.png)
+![Module bar showing BASEGAME, mounted modules, priorities, the active-module pen and an amber uncommitted-change dot](images/module-pane.png)
 
 ## Key terms
 
@@ -23,11 +23,11 @@ Set each module's priority to match its DLC mount number. Use unique priorities 
 
 The active module and the highest-priority module are separate concepts. Making a module active does not move it above other modules.
 
-![Two module versions of one row with the module-instance tabs visible in Properties](docs/images/module-instances-a.png)
+![Two module versions of one row with the module-instance tabs visible in Properties](images/module-instances-a.png)
 
 If two modules edit the same instance, it will display `≋` in the hierarchy. Use the module-instance tabs at the top of **PROPERTIES** to compare them.
 
-![Two module versions of one row visible in Hierarchy](docs/images/module-instances-b.png)
+![Two module versions of one row visible in Hierarchy](images/modules-instances-b.png)
 
 ## Module indicators
 
@@ -81,7 +81,7 @@ The destination depends on the row and editor surface:
 
 The editor creates a complete same-ID row in the chosen module. The lower source row remains unchanged.
 
-![Choose edit module window showing writable module names, tags and priorities](docs/images/choose-edit-module.png)
+![Choose edit module window showing writable module names, tags and priorities](images/choose-edit-module.png)
 
 ## Shared uncommitted changes
 
@@ -100,7 +100,7 @@ Example: If you move the position of an object on the map, it will appear as `Co
 
 Choosing **Commit** opens a fixed-size review window before anything is written. It lists changed CSV fields with their committed and staged values, identifies new or deleted rows, and includes module metadata and staged resource files. New rows are kept compact, showing their internal name and tree relationship rather than every added field. Long lists scroll within the window. Choose **Commit changes** to continue or **Cancel** to leave every change staged.
 
-![Undo, Redo, Discard and Commit controls with uncommitted changes present](docs/images/undo-redo-discard-commit.png]
+![Undo, Redo, Discard and Commit controls with uncommitted changes present](images/undo-redo-discard-commit.png)
 
 Undo and Redo history is shared and limited. It is cleared after Commit, Discard, Refresh or Unlink Module.
 
