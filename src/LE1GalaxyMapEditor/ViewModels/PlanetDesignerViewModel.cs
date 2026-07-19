@@ -219,13 +219,12 @@ public sealed class PlanetAppearanceFieldViewModel : ObservableObject
         Primary.SetTextureReferences(references);
         var options = references
             .Select(PlanetAppearanceCodec.TextureDisplayName)
-            .Distinct(StringComparer.OrdinalIgnoreCase);
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        TextureOptions.Clear();
         foreach (var option in options)
         {
-            if (!TextureOptions.Contains(option, StringComparer.OrdinalIgnoreCase))
-            {
-                TextureOptions.Add(option);
-            }
+            TextureOptions.Add(option);
         }
     }
 
@@ -270,6 +269,22 @@ public sealed record PlanetAppearanceGroupViewModel(
     bool ShowLinkTextureButton,
     IReadOnlyList<PlanetAppearanceFieldViewModel> Fields);
 
+public sealed record PlanetTextureLinkOption(
+    string ModuleTag,
+    string ModuleName,
+    string LinkId,
+    string InMemoryPath,
+    PlanetTextureCategory Categories,
+    bool IsAvailable,
+    bool CanUnlink,
+    int ReferenceCount)
+{
+    public string Availability => IsAvailable ? "Preview available" : "Preview file missing";
+    public string ReferenceDetail => ReferenceCount == 0
+        ? "No Planet rows currently reference this texture"
+        : $"Referenced by {ReferenceCount} Planet row" + (ReferenceCount == 1 ? string.Empty : "s");
+}
+
 public enum PlanetDesignerNavigationChoice
 {
     Apply,
@@ -290,6 +305,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     private readonly Func<bool> _canRedo;
     private readonly Func<GalaxyMapRowKey, string?, Planet?> _resolvePlanet;
     private readonly Func<PlanetTextureLinkRequest, WorkflowResult> _linkTexture;
+    private readonly Func<string, string, WorkflowResult> _unlinkTexture;
     private readonly Func<string, Rendering.PlanetPreviewTextureSource?> _resolvePreviewTexture;
     private readonly PlanetAppearanceTemplateStore _templates;
     private IReadOnlyList<PlanetAppearancePreset> _allPresets;
@@ -326,7 +342,8 @@ public sealed class PlanetDesignerViewModel : ObservableObject
             resolvePlanet,
             _ => WorkflowResult.Failure("Planet texture linking is unavailable in this context."),
             _ => null,
-            templates)
+            templates,
+            null)
     {
     }
 
@@ -341,7 +358,8 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         Func<GalaxyMapRowKey, string?, Planet?> resolvePlanet,
         Func<PlanetTextureLinkRequest, WorkflowResult> linkTexture,
         Func<string, Rendering.PlanetPreviewTextureSource?> resolvePreviewTexture,
-        PlanetAppearanceTemplateStore? templates = null)
+        PlanetAppearanceTemplateStore? templates = null,
+        Func<string, string, WorkflowResult>? unlinkTexture = null)
     {
         _workspace = workspace;
         _session = session;
@@ -352,6 +370,8 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         _canRedo = canRedo;
         _resolvePlanet = resolvePlanet;
         _linkTexture = linkTexture;
+        _unlinkTexture = unlinkTexture ?? ((_, _) =>
+            WorkflowResult.Failure("Planet texture unlinking is unavailable in this context."));
         _resolvePreviewTexture = resolvePreviewTexture;
         _templates = templates ?? new PlanetAppearanceTemplateStore();
         _allPresets = workspace() is { } currentWorkspace
@@ -371,6 +391,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         RefreshPresets();
         RefreshTemplates();
         Validate();
+        ReportUnavailableTextureLinks();
     }
 
     public event EventHandler? PreviewRequested;
@@ -594,18 +615,30 @@ public sealed class PlanetDesignerViewModel : ObservableObject
 
         try
         {
+            RefreshTextureOptions();
+            var linkedTextures = workspace.Layers
+                .SelectMany(layer => layer.Module.PlanetTextureLinks)
+                .ToArray();
+            var availableTextures = linkedTextures
+                .Where(link => _resolvePreviewTexture(link.InMemoryPath) is not null)
+                .ToArray();
             var result = PlanetAppearanceRandomizer.Generate(
                 _session.Draft,
                 workspace.BaseLayer.Planets,
-                customTextures: workspace.Layers.SelectMany(layer => layer.Module.PlanetTextureLinks));
+                customTextures: availableTextures);
             _session.Draft.CopyVisualsFrom(result.Appearance);
             RefreshFields();
             var customTextureDetail = result.CustomTexturePaths.Count == 0
                 ? string.Empty
                 : $" using {result.CustomTexturePaths.Count} linked custom texture" +
                   (result.CustomTexturePaths.Count == 1 ? string.Empty : "s");
+            var unavailableTextureDetail = linkedTextures.Length == availableTextures.Length
+                ? string.Empty
+                : $"; ignored {linkedTextures.Length - availableTextures.Length} unavailable texture link" +
+                  (linkedTextures.Length - availableTextures.Length == 1 ? string.Empty : "s");
             StatusMessage =
-                $"Randomised from {result.DonorName}{customTextureDetail} (seed {result.Seed}). Shader name was kept.";
+                $"Randomised from {result.DonorName}{customTextureDetail}{unavailableTextureDetail} " +
+                $"(seed {result.Seed}). Shader name was kept.";
             ErrorMessage = string.Empty;
             AppearanceChanged();
         }
@@ -618,6 +651,59 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     public bool LinkModuleTexture(PlanetTextureLinkRequest request)
     {
         var result = _linkTexture(request);
+        if (!result.Succeeded)
+        {
+            ErrorMessage = result.Error ?? result.Message;
+            return false;
+        }
+
+        RefreshTextureOptions();
+        StatusMessage = result.Message;
+        ErrorMessage = string.Empty;
+        return true;
+    }
+
+    public IReadOnlyList<PlanetTextureLinkOption> GetLinkedTextureOptions()
+    {
+        if (_workspace() is not { } workspace)
+        {
+            return [];
+        }
+
+        var textureColumns = PlanetAppearanceSchema.Properties
+            .Where(property => property.Editor == PlanetAppearanceEditorKind.Texture)
+            .SelectMany(property => property.Columns)
+            .ToArray();
+        return workspace.Layers
+            .SelectMany(layer => layer.Module.PlanetTextureLinks.Select(link =>
+            {
+                var references = workspace.Layers.SelectMany(candidate => candidate.Planets)
+                    .Count(planet => textureColumns.Any(column =>
+                    string.Equals(
+                        planet.ExtraFields.GetValueOrDefault(column),
+                        link.InMemoryPath,
+                        StringComparison.OrdinalIgnoreCase)));
+                return new PlanetTextureLinkOption(
+                    layer.Module.Tag,
+                    layer.Module.Name,
+                    link.Id,
+                    link.InMemoryPath,
+                    link.Categories,
+                    _resolvePreviewTexture(link.InMemoryPath) is not null,
+                    !layer.Module.IsReadOnly && !layer.Module.IsBaseGame,
+                    references);
+            }))
+            .OrderBy(option => option.ModuleTag, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(option => option.InMemoryPath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public void RefreshLinkedTextureState() => RefreshTextureOptions();
+
+    public bool UnlinkModuleTexture(PlanetTextureLinkOption option)
+    {
+        ArgumentNullException.ThrowIfNull(option);
+        var result = _unlinkTexture(option.ModuleTag, option.LinkId);
         if (!result.Succeeded)
         {
             ErrorMessage = result.Error ?? result.Message;
@@ -797,6 +883,22 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         }
     }
 
+    private void ReportUnavailableTextureLinks()
+    {
+        if (!string.IsNullOrWhiteSpace(StatusMessage))
+        {
+            return;
+        }
+
+        var unavailable = GetLinkedTextureOptions().Count(option => !option.IsAvailable);
+        if (unavailable > 0)
+        {
+            StatusMessage = $"{unavailable} linked Planet texture" +
+                            (unavailable == 1 ? " has" : "s have") +
+                            " a missing preview file and were excluded from material menus and randomisation.";
+        }
+    }
+
     private IReadOnlyList<PlanetAppearanceGroupViewModel> CreateGroups(PlanetAppearance appearance) =>
         PlanetAppearanceSchema.Groups
             .Select(group => new PlanetAppearanceGroupViewModel(
@@ -832,6 +934,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         return workspace.Layers
             .SelectMany(layer => layer.Module.PlanetTextureLinks)
             .Where(link => (link.Categories & category) != 0)
+            .Where(link => _resolvePreviewTexture(link.InMemoryPath) is not null)
             .Select(link => link.InMemoryPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();

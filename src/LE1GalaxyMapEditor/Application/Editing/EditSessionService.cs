@@ -58,6 +58,9 @@ public sealed class EditSessionService
     public void StageFile(PendingFileWrite pending)
         => _session.Changes.StageFile(pending);
 
+    public bool RemovePendingFile(string moduleTag, string relativePath)
+        => _session.Changes.RemovePendingFile(moduleTag, relativePath);
+
     public void RemoveModuleChanges(string moduleTag)
         => _session.Changes.RemoveModule(moduleTag);
 

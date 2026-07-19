@@ -786,7 +786,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             () => _edits.CanRedo,
             ResolvePlanetForDesigner,
             request => LinkPlanetTexture(designer, request),
-            ResolvePlanetPreviewTexture);
+            ResolvePlanetPreviewTexture,
+            unlinkTexture: (moduleTag, linkId) => UnlinkPlanetTexture(designer, moduleTag, linkId));
     }
 
     private Planet? ResolvePlanetForDesigner(GalaxyMapRowKey key, string? moduleTag)
@@ -936,6 +937,43 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (result.Succeeded)
         {
             _navigation.PreferredInstanceTag = target.Tag;
+            RefreshWorkspace(designer.Key, CaptureView(), result.Message, refreshModules: true);
+        }
+        return result;
+    }
+
+    private WorkflowResult UnlinkPlanetTexture(
+        PlanetDesignerSession designer,
+        string moduleTag,
+        string linkId)
+    {
+        if (Workspace is null)
+        {
+            return WorkflowResult.Failure("The galaxy-map workspace is no longer available.", designer.Key);
+        }
+
+        var target = Workspace.ModuleLayers
+            .Select(layer => layer.Module)
+            .FirstOrDefault(module => string.Equals(module.Tag, moduleTag, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+        {
+            return WorkflowResult.Failure("The module containing that Planet texture is no longer mounted.", designer.Key);
+        }
+
+        var planet = ResolvePlanetForDesigner(designer.Key, designer.ModuleTag) ??
+                     ResolvePlanetForDesigner(designer.Key, null);
+        if (planet is null)
+        {
+            return WorkflowResult.Failure("The Planet row is no longer present in the workspace.", designer.Key);
+        }
+
+        var result = _planetTextures.Unlink(
+            planet,
+            target,
+            linkId,
+            CaptureHistoryPresentation(designer.Key));
+        if (result.Succeeded)
+        {
             RefreshWorkspace(designer.Key, CaptureView(), result.Message, refreshModules: true);
         }
         return result;

@@ -61,6 +61,9 @@ public sealed class EditChangeSet
     internal void StageFile(PendingFileWrite pending)
         => _pendingFiles[(pending.ModuleTag, pending.RelativePath)] = Clone(pending);
 
+    internal bool RemovePendingFile(string moduleTag, string relativePath)
+        => _pendingFiles.Remove((moduleTag, relativePath));
+
     public bool ContainsModule(string moduleTag)
         => _dirtyTables.ContainsKey(moduleTag) ||
            _dirtyModuleMetadata.Contains(moduleTag) ||

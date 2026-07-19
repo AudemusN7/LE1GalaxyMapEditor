@@ -440,6 +440,35 @@ public partial class PlanetDesignerWindow : Window
         }
     }
 
+    private void ManageModuleTextures_OnClick(object sender, RoutedEventArgs eventArgs)
+    {
+        ViewModel.RefreshLinkedTextureState();
+        var manager = new PlanetTextureManagerWindow(ViewModel.GetLinkedTextureOptions()) { Owner = this };
+        if (manager.ShowDialog() != true || manager.SelectedOption is not { } option)
+        {
+            return;
+        }
+
+        var referenceWarning = option.ReferenceCount == 0
+            ? "No Planet rows currently reference it."
+            : $"{option.ReferenceCount} Planet row" + (option.ReferenceCount == 1 ? " currently references" : "s currently reference") +
+              " it and will use a fallback preview until changed.";
+        var confirmation = new ConfirmationWindow(
+            "Unlink Planet texture",
+            $"Unlink {option.InMemoryPath} from {option.ModuleTag}?\n\n{referenceWarning}\n\n" +
+            "The module preview file will not be deleted.",
+            "Unlink texture",
+            "Keep linked")
+        {
+            Owner = this
+        };
+        confirmation.ShowDialog();
+        if (confirmation.Choice == ConfirmationChoice.Primary)
+        {
+            ViewModel.UnlinkModuleTexture(option);
+        }
+    }
+
     public bool NavigateToPlanet(GalaxyMapRowKey key, string? moduleTag = null) =>
         TryNavigateToPlanet(key, moduleTag, null);
 

@@ -2907,6 +2907,68 @@ internal static class Program
             var reloadedPlanetModule = new GalaxyMapModuleManifestStore().Load(viewModel.ActiveModule.FolderPath!);
             Equal(renamedPlanetPath, reloadedPlanetModule.PlanetTextureLinks.Single().InMemoryPath,
                 "renamed Planet texture relationship survives manifest reload");
+
+            File.Delete(stagedPlanetPath);
+            var staleTextureDesigner = viewModel.CreatePlanetDesigner(materialPlanet.Key);
+            var staleOption = staleTextureDesigner.GetLinkedTextureOptions().Single();
+            True(!staleOption.IsAvailable,
+                "a linked Planet texture reports a missing committed preview file");
+            True(staleOption.CanUnlink,
+                "a stale Planet texture in a writable module remains removable");
+            True(staleOption.ReferenceCount > 0,
+                "texture management reports existing Planet-row references before unlinking");
+            True(staleTextureDesigner.Groups.SelectMany(group => group.Fields)
+                    .Where(field => field.IsTexture && !string.Equals(
+                        field.Primary.RawValue,
+                        renamedPlanetPath,
+                        StringComparison.OrdinalIgnoreCase))
+                    .All(field => !field.TextureOptions.Contains("RenamedPlanet01")),
+                "a missing linked texture is not offered by unrelated material dropdowns");
+            True(staleTextureDesigner.Groups.SelectMany(group => group.Fields)
+                    .Where(field => field.IsTexture && string.Equals(
+                        field.Primary.RawValue,
+                        renamedPlanetPath,
+                        StringComparison.OrdinalIgnoreCase))
+                    .All(field => field.TextureOptions.Contains("RenamedPlanet01")),
+                "a field preserves its visible raw value when it currently references a missing texture");
+
+            staleTextureDesigner.RandomiseCommand.Execute(null);
+            True(staleTextureDesigner.Groups.SelectMany(group => group.Fields)
+                    .Where(field => field.IsTexture)
+                    .All(field => !string.Equals(
+                        field.Primary.RawValue,
+                        renamedPlanetPath,
+                        StringComparison.OrdinalIgnoreCase)),
+                "a missing linked texture is excluded from the randomisation pool");
+            True(staleTextureDesigner.StatusMessage.Contains("ignored 1 unavailable", StringComparison.OrdinalIgnoreCase),
+                "randomisation reports stale texture links instead of silently using them");
+
+            True(staleTextureDesigner.UnlinkModuleTexture(staleOption),
+                "a stale Planet texture can be unlinked from the Designer");
+            Equal(0, viewModel.ActiveModule!.PlanetTextureLinks.Count,
+                "unlinking removes the texture relationship from live module metadata");
+            True(viewModel.CommitPendingChanges(), "unlinked Planet texture metadata commits");
+            Equal(0, new GalaxyMapModuleManifestStore().Load(viewModel.ActiveModule.FolderPath!)
+                    .PlanetTextureLinks.Count,
+                "unlinked Planet texture is removed from the persisted manifest");
+
+            var pendingTextureDesigner = viewModel.CreatePlanetDesigner(materialPlanet.Key);
+            True(pendingTextureDesigner.LinkModuleTexture(new PlanetTextureLinkRequest(
+                    "BIOA_TEXTURE_MODULE_T.PendingRemoval",
+                    sourceTexture,
+                    PlanetTextureCategory.Ocean)),
+                "a replacement Planet texture can be staged for pending-removal coverage");
+            var pendingLink = viewModel.ActiveModule!.PlanetTextureLinks.Single();
+            var pendingPath = Path.Combine(
+                viewModel.ActiveModule.FolderPath!,
+                pendingLink.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            True(!File.Exists(pendingPath), "new replacement preview remains pending before Commit");
+            True(pendingTextureDesigner.UnlinkModuleTexture(
+                    pendingTextureDesigner.GetLinkedTextureOptions().Single()),
+                "a not-yet-committed Planet texture can be unlinked");
+            True(viewModel.CommitPendingChanges(), "pending texture unlink metadata commits");
+            True(!File.Exists(pendingPath),
+                "unlinking removes its pending file write instead of creating an orphan on Commit");
         });
     }
 

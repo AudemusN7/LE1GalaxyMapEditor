@@ -370,11 +370,16 @@
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
                                     </Expander>
-                                    <Button Content="Link module texture..."
-                                            Visibility="{Binding ShowLinkTextureButton, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                            HorizontalAlignment="Stretch" Margin="4,0,4,11" Padding="10,6"
-                                            Click="LinkModuleTexture_OnClick"
-                                            ToolTip="Stage a local preview image and expose its seek-free texture reference in selected material menus."/>
+                                    <Grid Visibility="{Binding ShowLinkTextureButton, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                          Margin="4,0,4,11">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <Button Content="Link texture..." Margin="0,0,4,0" Padding="10,6"
+                                                Click="LinkModuleTexture_OnClick"
+                                                ToolTip="Stage a local preview image and expose its seek-free texture reference in selected material menus."/>
+                                        <Button Grid.Column="1" Content="Manage textures..." Margin="4,0,0,0" Padding="10,6"
+                                                Click="ManageModuleTextures_OnClick"
+                                                ToolTip="Inspect or unlink custom Planet texture relationships from mounted modules."/>
+                                    </Grid>
                                     </StackPanel>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>

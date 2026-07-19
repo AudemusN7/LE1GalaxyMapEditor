@@ -117,6 +117,10 @@ The status bar identifies the donor planet and generation seed. Clicking **Rando
 
 Linked custom Planet textures from mounted modules participate in randomisation. Each texture is considered only for the material categories selected when it was linked, and each compatible texture slot has a 35% chance to use a custom option when one is available. The status bar reports when linked textures were selected.
 
+Choose **Manage textures...** below Identity to inspect linked textures, their module, categories, availability and current Planet-row reference count. **Unlink selected** removes the relationship from writable module metadata and immediately removes it from randomisation and selectable dropdown options. A field that currently stores the unlinked reference keeps showing that raw value until it is changed, so the Designer never conceals CSV data. Unlinking does not rewrite existing Planet CSV references or delete an already committed preview file.
+
+When a linked preview file is missing and no staged copy is available, the Designer marks the relationship unavailable and excludes it from dropdowns and randomisation. Use **Manage textures...** to unlink the stale relationship or relink the same in-memory path to a replacement preview image.
+
 ## Personal templates
 
 Choose **Save current...** to open **Save Planet template**. Enter a unique template name.

@@ -162,6 +162,49 @@ public sealed class PlanetTextureWorkflow(
         return null;
     }
 
+    public WorkflowResult Unlink(
+        Planet planet,
+        GalaxyMapModule target,
+        string linkId,
+        HistoryPresentationState presentation)
+    {
+        var workspace = session.Workspace;
+        if (workspace is null || target.IsReadOnly || target.IsBaseGame)
+        {
+            return WorkflowResult.Failure("Planet textures can be unlinked only from a writable module.");
+        }
+
+        var link = target.PlanetTextureLinks.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, linkId, StringComparison.OrdinalIgnoreCase));
+        if (link is null)
+        {
+            return WorkflowResult.Failure("The linked Planet texture is no longer present in that module.");
+        }
+
+        var replacement = target.With(planetTextureLinks: target.PlanetTextureLinks
+            .Where(candidate => !string.Equals(candidate.Id, link.Id, StringComparison.OrdinalIgnoreCase))
+            .ToArray());
+        var impact = ChangeImpact.For([GalaxyMapTable.Planet], [planet.Key], isStructural: false);
+        return edits.ExecuteSessionMutation(new SessionMutationRequest(
+            () =>
+            {
+                workspace.ReplaceModule(target, replacement);
+                edits.RemovePendingFile(target.Tag, link.RelativePath);
+                edits.MarkMetadataDirty(replacement);
+            },
+            () =>
+            {
+                var current = workspace.Modules.FirstOrDefault(module => ReferenceEquals(module, replacement));
+                if (current is not null)
+                {
+                    workspace.ReplaceModule(replacement, target);
+                }
+            },
+            impact,
+            presentation with { SelectionKey = planet.Key },
+            $"unlinked Planet texture {link.InMemoryPath} from {target.Tag}. Its preview file was left untouched."));
+    }
+
     public static GalaxyMapModule? CreateRenamedReference(
         GalaxyMapModule module,
         string oldPath,
