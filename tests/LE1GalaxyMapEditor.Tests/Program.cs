@@ -40,6 +40,7 @@ internal static class Program
         Run("Compact map-number formatting", CompactMapNumberFormatting);
         Run("Planet appearance columns are categorized", PlanetAppearanceColumnsAreCategorized);
         Run("Planet appearance codec, presets and templates", PlanetAppearanceCodecPresetsAndTemplates);
+        Run("Guarded Planet appearance randomiser", GuardedPlanetAppearanceRandomizer);
         Run("Planet Designer workflow and Shader guard", PlanetDesignerWorkflowAndShaderGuard);
         Run("Planet Designer BASEGAME override prompts", PlanetDesignerBaseGameOverridePrompts);
         Run("Planet preview renderer production assets", PlanetPreviewRendererProductionAssets);
@@ -386,6 +387,187 @@ internal static class Program
             True(store.Warnings.Any(warning => warning.Contains("broken.json", StringComparison.OrdinalIgnoreCase)),
                 "skipped personal templates produce a warning");
         });
+    }
+
+    private static void GuardedPlanetAppearanceRandomizer()
+    {
+        var baseLayer = new CsvGalaxyMapLoader().LoadBuiltInLayer();
+        var source = baseLayer.Planets.First(planet =>
+            PlanetAppearanceCodec.IsAppearanceCapable(planet) &&
+            !string.IsNullOrWhiteSpace(planet.ExtraFields.GetValueOrDefault("Shader")));
+        var original = PlanetAppearanceCodec.Decode(source);
+        var first = PlanetAppearanceRandomizer.Generate(original, baseLayer.Planets, 1701);
+        var repeated = PlanetAppearanceRandomizer.Generate(original, baseLayer.Planets, 1701);
+
+        Equal(original.Shader, first.Appearance.Shader,
+            "randomisation preserves the target Planet Shader identity");
+        Equal(first.DonorName, repeated.DonorName,
+            "a randomisation seed selects the same donor appearance");
+        SequenceEqual(
+            PlanetAppearanceSchema.Columns.Select(column => first.Appearance[column]),
+            PlanetAppearanceSchema.Columns.Select(column => repeated.Appearance[column]),
+            "a randomisation seed reproduces every generated material value");
+        True(PlanetAppearanceCodec.ChangedColumns(original, first.Appearance).Count > 20,
+            "randomisation replaces a substantial visual appearance rather than nudging one control");
+
+        var exceedsFormerTenPercentBand = false;
+        foreach (var seed in Enumerable.Range(0, 64))
+        {
+            var randomisation = PlanetAppearanceRandomizer.Generate(original, baseLayer.Planets, seed);
+            var generated = randomisation.Appearance;
+            var donor = PlanetAppearanceCodec.Decode(
+                baseLayer.Planets.Single(planet => planet.RowId == randomisation.DonorRowId));
+            Equal(original.Shader, generated.Shader, $"seed {seed} keeps the Shader name");
+            foreach (var property in PlanetAppearanceSchema.Properties.Where(property =>
+                         property.Editor is PlanetAppearanceEditorKind.Scalar or
+                             PlanetAppearanceEditorKind.ColorVector or
+                             PlanetAppearanceEditorKind.MixerVector))
+            {
+                foreach (var column in property.Columns)
+                {
+                    True(PlanetAppearanceCodec.TryParseFloat(generated[column], out _),
+                        $"seed {seed} emits a finite value for {column}");
+                }
+            }
+
+            double Value(string column) => double.Parse(generated[column], CultureInfo.InvariantCulture);
+            double Luminance(string prefix) =>
+                0.2126 * Value(prefix + "R") +
+                0.7152 * Value(prefix + "G") +
+                0.0722 * Value(prefix + "B");
+            double MixerSum(string prefix) =>
+                "RGB".Sum(component => Math.Max(0, Value(prefix + component)));
+            double PackedLuminance(string column)
+            {
+                var packed = unchecked((uint)long.Parse(generated[column], CultureInfo.InvariantCulture));
+                double Linear(uint component)
+                {
+                    var value = component / 255d;
+                    return value <= 0.04045
+                        ? value / 12.92
+                        : Math.Pow((value + 0.055) / 1.055, 2.4);
+                }
+
+                return 0.2126 * Linear((packed >> 16) & 0xff) +
+                       0.7152 * Linear((packed >> 8) & 0xff) +
+                       0.0722 * Linear(packed & 0xff);
+            }
+
+            foreach (var column in new[]
+                     {
+                         "Bump_Amount", "Atmosphere_Min", "Atmosphere_Tile_U",
+                         "Atmosphere_Tile_V", "Emissive_Twinkle_Multiplier",
+                         "Normal_Map_Tile", "City_Emissive_Tile",
+                         "Horizon_Atmosphere_Falloff"
+                     })
+            {
+                var donorValue = double.Parse(donor[column], CultureInfo.InvariantCulture);
+                if (donorValue <= 0)
+                {
+                    continue;
+                }
+
+                var ratio = Value(column) / donorValue;
+                True(ratio is >= 0.649 and <= 1.351,
+                    $"seed {seed} keeps {column} inside the 35 percent variation budget");
+                exceedsFormerTenPercentBand |= ratio is < 0.899 or > 1.101;
+            }
+
+            var maskWeight = new[] { "Continent_Mask_Mixer", "Continent_Mask_Mixer02" }
+                .Sum(prefix => MixerSum(prefix));
+            True(maskWeight > 0, $"seed {seed} retains usable continent-mask weights");
+            True(Value("Landmass_MixerG") / maskWeight is >= 0 and <= 0.601,
+                $"seed {seed} keeps land coverage inside the guarded ratio");
+            True(Value("Landmass_MixerR") / maskWeight is >= 0 and <= 0.851,
+                $"seed {seed} keeps beach width inside the guarded ratio");
+            True(Value("Landmass_MixerB") / maskWeight is >= 0 and <= 0.551,
+                $"seed {seed} keeps silt width inside the guarded ratio");
+
+            True(Luminance("Atmosphere_Color") * MixerSum("Atmosphere_Mixer") <= 45.001,
+                $"seed {seed} stays within the atmosphere energy envelope");
+            True(Luminance("Horizon_Atmosphere_Color") * Value("Horizon_Atmosphere_Intensity") <= 7.101,
+                $"seed {seed} stays within the horizon energy envelope");
+            True(Luminance("Corona_Color") * Value("Opacity") <= 3.251,
+                $"seed {seed} stays within the corona energy envelope");
+            True(Luminance("City_Emissive_Color") * MixerSum("City_Emissive_Mixer") <= 3.251,
+                $"seed {seed} stays within the city-emissive energy envelope");
+            True(PackedLuminance("SunColor1") * Value("Brightness1") <= 3.201,
+                $"seed {seed} stays within the first-light energy envelope");
+            True(PackedLuminance("SunColor2") * Value("Brightness2") <= 106.01,
+                $"seed {seed} stays within the second-light energy envelope");
+            True(new[]
+                    {
+                        "Beach_Color", "Continent_Color", "Continent_Color_Alt",
+                        "Ocean_Color", "Ocean_Color_Alt", "Silt_Color"
+                    }.Max(Luminance) <= 1.101,
+                $"seed {seed} prevents HDR overbleed from the surface palette");
+        }
+
+        var customLinks = new[]
+        {
+            new PlanetTextureLink(
+                "random-continent", "BIOA_RANDOM_T.CustomContinent", "textures/continent.png",
+                PlanetTextureCategory.Continent),
+            new PlanetTextureLink(
+                "random-normal", "BIOA_RANDOM_T.CustomNormal", "textures/normal.png",
+                PlanetTextureCategory.Normals),
+            new PlanetTextureLink(
+                "random-ocean", "BIOA_RANDOM_T.CustomOcean", "textures/ocean.png",
+                PlanetTextureCategory.Ocean),
+            new PlanetTextureLink(
+                "random-city", "BIOA_RANDOM_T.CustomCity", "textures/city.png",
+                PlanetTextureCategory.CityEmissive),
+            new PlanetTextureLink(
+                "random-atmosphere", "BIOA_RANDOM_T.CustomAtmosphere", "textures/atmosphere.png",
+                PlanetTextureCategory.Atmosphere)
+        };
+        var validCustomSlots = new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [customLinks[0].InMemoryPath] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "ContinentMask01", "ContinentMask02", "Continent_Texture" },
+            [customLinks[1].InMemoryPath] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "Normal_Map" },
+            [customLinks[2].InMemoryPath] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "Ocean_Texture" },
+            [customLinks[3].InMemoryPath] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "City_Emissive" },
+            [customLinks[4].InMemoryPath] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "AtmosphereMaster" }
+        };
+        var customTexturesSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var textureColumns = validCustomSlots.Values.SelectMany(columns => columns)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        foreach (var seed in Enumerable.Range(0, 64))
+        {
+            var randomisation = PlanetAppearanceRandomizer.Generate(
+                original,
+                baseLayer.Planets,
+                seed,
+                customLinks);
+            var usedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var column in textureColumns)
+            {
+                var path = randomisation.Appearance[column];
+                if (!validCustomSlots.TryGetValue(path, out var validColumns))
+                {
+                    continue;
+                }
+
+                True(validColumns.Contains(column),
+                    $"seed {seed} uses {path} only in a linked texture category");
+                usedPaths.Add(path);
+                customTexturesSeen.Add(path);
+            }
+
+            True(usedPaths.SetEquals(randomisation.CustomTexturePaths),
+                $"seed {seed} reports precisely the linked custom textures it selected");
+        }
+
+        Equal(customLinks.Length, customTexturesSeen.Count,
+            "the deterministic custom-texture sweep reaches every linked material category");
+        True(exceedsFormerTenPercentBand,
+            "the expanded randomiser produces scalar variation beyond the former ten percent band");
     }
 
     private static void PlanetDesignerWorkflowAndShaderGuard()
@@ -2840,6 +3022,19 @@ internal static class Program
 
     private static void WpfViewsComposeAfterLoad()
     {
+        using var processWatchdog = new System.Threading.Timer(
+            _ =>
+            {
+                Console.Error.WriteLine(
+                    "FAIL  WPF composition test exceeded three minutes and will be terminated. " +
+                    "A modal dialog or renderer operation may be blocking teardown.");
+                Console.Error.Flush();
+                Process.GetCurrentProcess().Kill(entireProcessTree: true);
+            },
+            null,
+            TimeSpan.FromMinutes(3),
+            Timeout.InfiniteTimeSpan);
+
         WithFixture(folder =>
         {
             var application = new App();
@@ -3191,13 +3386,17 @@ internal static class Program
             var framesBeforeColorPreview = designerWindow.Diagnostics.Snapshot().FramesPresented;
             var packedDesignerField = designerWindow.ViewModel.Groups.SelectMany(group => group.Fields)
                 .First(field => field.IsPackedColor);
-            packedDesignerField.Primary.Value = packedDesignerField.Primary.Value == "-1" ? "-16777216" : "-1";
+            var originalPackedValue = packedDesignerField.Primary.Value;
+            packedDesignerField.Primary.Value = originalPackedValue == "-1" ? "-16777216" : "-1";
             True(PumpDispatcherUntil(
                     application.Dispatcher,
                     () => designerWindow.Diagnostics.Snapshot().FramesPresented > framesBeforeColorPreview,
                     TimeSpan.FromSeconds(3)),
                 "an owned colour picker leaves the Planet Designer live preview running");
             liveColorDialog.Close();
+            packedDesignerField.Primary.Value = originalPackedValue;
+            True(!designerWindow.ViewModel.IsDirty,
+                "live-preview probe restores its draft before preset navigation and test teardown");
             var textureCombo = FindVisualDescendants<ComboBox>(designerWindow)
                 .First(comboBox => comboBox.DataContext is PlanetAppearanceFieldViewModel { IsTexture: true });
             textureCombo.ApplyTemplate();

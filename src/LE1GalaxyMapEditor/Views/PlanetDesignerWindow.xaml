@@ -390,6 +390,7 @@
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <Button Content="Close" Padding="16,7" Margin="0,0,8,0" Click="Close_OnClick"/>
+                    <Button Content="Randomise" Padding="16,7" Margin="0,0,8,0" Command="{Binding RandomiseCommand}" ToolTip="Create a guarded variation from a BASEGAME planet appearance"/>
                     <Button Content="Apply appearance" Padding="18,7" Command="{Binding ApplyCommand}" IsDefault="True" ToolTip="Stage this appearance as one undoable editor change (Ctrl+S)"/>
                 </StackPanel>
             </Grid>

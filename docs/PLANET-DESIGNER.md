@@ -109,6 +109,14 @@ This is an internal application clipboard rather than the Windows clipboard. Pas
 
 Switching the selected planet does not copy appearance by itself.
 
+## Randomise appearance
+
+Choose **Randomise** between **Close** and **Apply appearance** to create a guarded variation of a BASEGAME planet material. The randomiser inherits coupled material blocks from a deduplicated vanilla appearance, then coherently varies non-zero scalar and derived-energy values by up to 35%. Land topology receives a smaller bounded variation, while related colours share a hue transformation and remain inside conservative HDR energy limits. It preserves the current planet's Shader name and updates only the private Designer draft until **Apply appearance** is chosen.
+
+The status bar identifies the donor planet and generation seed. Clicking **Randomise** again creates another draft; closing or switching planets still offers the normal Apply, Discard and Cancel choices.
+
+Linked custom Planet textures from mounted modules participate in randomisation. Each texture is considered only for the material categories selected when it was linked, and each compatible texture slot has a 35% chance to use a custom option when one is available. The status bar reports when linked textures were selected.
+
 ## Personal templates
 
 Choose **Save current...** to open **Save Planet template**. Enter a unique template name.

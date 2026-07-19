@@ -360,6 +360,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
 
         Groups = CreateGroups(session.Draft);
         ApplyCommand = new RelayCommand(Apply, CanApply);
+        RandomiseCommand = new RelayCommand(Randomise, () => _workspace() is not null);
         UndoCommand = new RelayCommand(Undo, () => !IsDirty && _canUndo());
         RedoCommand = new RelayCommand(Redo, () => !IsDirty && _canRedo());
         UseTemplateCommand = new RelayCommand<PlanetAppearanceTemplate>(UseTemplate, template => template is not null);
@@ -381,6 +382,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     public ObservableCollection<PlanetPresetModuleGroup> PresetModules { get; } = [];
     public ObservableCollection<PlanetAppearanceTemplate> PersonalTemplates { get; } = [];
     public RelayCommand ApplyCommand { get; }
+    public RelayCommand RandomiseCommand { get; }
     public RelayCommand UndoCommand { get; }
     public RelayCommand RedoCommand { get; }
     public RelayCommand<PlanetAppearanceTemplate> UseTemplateCommand { get; }
@@ -581,6 +583,37 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     }
 
     public bool TryApply() => ApplyCore();
+
+    private void Randomise()
+    {
+        if (_workspace() is not { } workspace)
+        {
+            ErrorMessage = "The galaxy-map workspace is no longer available.";
+            return;
+        }
+
+        try
+        {
+            var result = PlanetAppearanceRandomizer.Generate(
+                _session.Draft,
+                workspace.BaseLayer.Planets,
+                customTextures: workspace.Layers.SelectMany(layer => layer.Module.PlanetTextureLinks));
+            _session.Draft.CopyVisualsFrom(result.Appearance);
+            RefreshFields();
+            var customTextureDetail = result.CustomTexturePaths.Count == 0
+                ? string.Empty
+                : $" using {result.CustomTexturePaths.Count} linked custom texture" +
+                  (result.CustomTexturePaths.Count == 1 ? string.Empty : "s");
+            StatusMessage =
+                $"Randomised from {result.DonorName}{customTextureDetail} (seed {result.Seed}). Shader name was kept.";
+            ErrorMessage = string.Empty;
+            AppearanceChanged();
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
+    }
 
     public bool LinkModuleTexture(PlanetTextureLinkRequest request)
     {
