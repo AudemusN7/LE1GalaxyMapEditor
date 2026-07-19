@@ -8,6 +8,9 @@ namespace LE1GalaxyMapEditor.Controls;
 
 public sealed class RelayLayer : FrameworkElement
 {
+    private static readonly Pen GlowPen = CreatePen(Color.FromArgb(55, 255, 46, 66), 7);
+    private static readonly Pen LinePen = CreatePen(Color.FromRgb(235, 49, 69), 2);
+
     public static readonly DependencyProperty ConnectionsProperty = DependencyProperty.Register(
         nameof(Connections), typeof(IEnumerable), typeof(RelayLayer),
         new FrameworkPropertyMetadata(
@@ -58,14 +61,21 @@ public sealed class RelayLayer : FrameworkElement
             return;
         }
 
-        var glowPen = new Pen(new SolidColorBrush(Color.FromArgb(55, 255, 46, 66)), 7);
-        var linePen = new Pen(new SolidColorBrush(Color.FromRgb(235, 49, 69)), 2);
         foreach (var relay in Connections.OfType<RelayConnection>().Where(relay => relay.IsResolved))
         {
             var start = new Point(relay.StartCluster!.X * ActualWidth, relay.StartCluster.Y * ActualHeight);
             var end = new Point(relay.EndCluster!.X * ActualWidth, relay.EndCluster.Y * ActualHeight);
-            drawingContext.DrawLine(glowPen, start, end);
-            drawingContext.DrawLine(linePen, start, end);
+            drawingContext.DrawLine(GlowPen, start, end);
+            drawingContext.DrawLine(LinePen, start, end);
         }
+    }
+
+    private static Pen CreatePen(Color color, double thickness)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        var pen = new Pen(brush, thickness);
+        pen.Freeze();
+        return pen;
     }
 }

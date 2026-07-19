@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Services;
+using LE1GalaxyMapEditor.ViewModels;
 
 namespace LE1GalaxyMapEditor.Tests;
 
@@ -15,6 +16,7 @@ internal static class OptimizationRegressionTests
 {
     public static void Register(Action<string, Action> run)
     {
+        PhaseZeroRefreshAndTableTests.Register(run);
         run("Optimisation: deterministic override order", DeterministicOverrideOrder);
         run("Optimisation: reservations and allocator boundaries", ReservationsAndAllocatorBoundaries);
         run("Optimisation: partial CSV failure isolation", PartialCsvFailureIsolation);
@@ -24,6 +26,8 @@ internal static class OptimizationRegressionTests
         run("Optimisation: corrupt workspace settings are contained", CorruptWorkspaceSettingsAreContained);
         run("Optimisation: layer clones are isolated", LayerClonesAreIsolated);
         run("Optimisation: CSV snapshots share no dirty state", CsvSnapshotsShareNoDirtyState);
+        run("Optimisation: module-tag suggestions follow the domain invariant", ModuleTagSuggestionsFollowDomainInvariant);
+        run("Optimisation: appearance metadata follows the explicit schema", AppearanceMetadataFollowsExplicitSchema);
     }
 
     private static void DeterministicOverrideOrder()
@@ -145,8 +149,24 @@ internal static class OptimizationRegressionTests
             File.WriteAllLines(path, lines, new UTF8Encoding(true));
             Throws<GalaxyMapLoadException>(
                 () => loader.LoadPartFolder(folder, module),
-                message => message.Contains("canonical Cluster columns", StringComparison.OrdinalIgnoreCase),
+                message => message.Contains("expected 'Label'", StringComparison.OrdinalIgnoreCase),
                 "noncanonical partial schema");
+
+            File.WriteAllBytes(path, validBytes);
+            lines = File.ReadAllLines(path, Encoding.UTF8);
+            lines[0] += ",FutureColumn";
+            File.WriteAllLines(path, lines, new UTF8Encoding(true));
+            Throws<GalaxyMapLoadException>(
+                () => loader.LoadPartFolder(folder, module),
+                message => message.Contains("requires exactly", StringComparison.OrdinalIgnoreCase),
+                "partial schemas cannot add columns");
+
+            File.WriteAllBytes(path, validBytes);
+            lines = File.ReadAllLines(path, Encoding.UTF8);
+            lines[0] = lines[0].ToLowerInvariant();
+            File.WriteAllLines(path, lines, new UTF8Encoding(true));
+            Equal(1, loader.LoadPartFolder(folder, module).Clusters.Count,
+                "canonical partial header casing is ignored");
 
             File.WriteAllBytes(path, validBytes);
             Equal(1, loader.LoadPartFolder(folder, module).Clusters.Count,
@@ -276,14 +296,14 @@ internal static class OptimizationRegressionTests
     private static void RelayAndActiveWorldEncodingBoundaries()
     {
         var document = new GalaxyMapDocument();
-        var huge = NewCluster(1, "Cluster214748", "Largest Relay-safe Cluster");
+        var huge = NewCluster(1, "Cluster100", "Unsupported Cluster");
         var ordinary = NewCluster(2, "Cluster01", "Ordinary Cluster");
         document.Clusters.Add(huge);
         document.Clusters.Add(ordinary);
         document.Systems.Add(new GalaxySystem
         {
             RowId = 1,
-            Label = "System99",
+            Label = "System10",
             ClusterRowId = huge.RowId,
             NameText = "Boundary System",
             Scale = 1
@@ -291,7 +311,7 @@ internal static class OptimizationRegressionTests
         document.Planets.Add(new Planet
         {
             RowId = 1,
-            Label = "Planet99",
+            Label = "Planet100",
             SystemRowId = 1,
             NameText = "Overflowing ActiveWorld",
             ActiveWorld = 0,
@@ -303,14 +323,14 @@ internal static class OptimizationRegressionTests
         document.Relays.Add(new RelayConnection
         {
             RowId = 1,
-            StartClusterEncoded = 2_147_480_000,
+            StartClusterEncoded = 1_000_000,
             EndClusterEncoded = 10_000
         });
         document.Relays.Add(new RelayConnection
         {
             RowId = 2,
             StartClusterEncoded = 10_000,
-            EndClusterEncoded = 2_147_480_000
+            EndClusterEncoded = 1_000_000
         });
         document.Relays.Add(new RelayConnection
         {
@@ -320,16 +340,19 @@ internal static class OptimizationRegressionTests
         });
         document.RebuildRelationships();
 
-        True(document.TryGetRelayCode(huge, out var boundaryCode, out var error),
-            $"largest Relay-safe label encodes: {error}");
-        Equal(2_147_480_000, boundaryCode, "largest Relay-safe code");
-        True(!document.TryAddRelay(ordinary, huge, out _, out var duplicateError),
-            "reverse Relay duplicate is rejected");
-        True(duplicateError.Contains("already", StringComparison.OrdinalIgnoreCase), "duplicate Relay explanation");
+        True(!document.TryGetRelayCode(huge, out _, out _),
+            "Cluster100 is rejected as a Relay endpoint");
+        True(document.TryGetRelayCode(ordinary, out var ordinaryCode, out var ordinaryError),
+            $"ordinary Relay label encodes: {ordinaryError}");
+        Equal(10_000, ordinaryCode, "ordinary Relay code");
 
         var diagnostics = new GalaxyMapValidator().Validate(document);
-        Equal(1, diagnostics.Count(item => item.Code == "ACTIVEWORLD-RANGE" && item.RowId == 1),
-            "ActiveWorld overflow is diagnosed before integer arithmetic wraps");
+        Equal(1, diagnostics.Count(item => item.Code == "LABEL-CLUSTER-RANGE" && item.RowId == 1),
+            "Cluster100 is diagnosed as outside the game-supported range");
+        Equal(1, diagnostics.Count(item => item.Code == "LABEL-SYSTEM-RANGE" && item.RowId == 1),
+            "System10 is diagnosed as outside the game-supported range");
+        Equal(1, diagnostics.Count(item => item.Code == "LABEL-PLANET-RANGE" && item.RowId == 1),
+            "Planet100 is diagnosed as outside the game-supported range");
         Equal(1, diagnostics.Count(item => item.Code == "RELAY-DUPLICATE-PAIR" && item.RowId == 2),
             "reversed Relay pair is diagnosed once");
         Equal(1, diagnostics.Count(item => item.Code == "RELAY-ENCODING" && item.RowId == 3),
@@ -426,6 +449,40 @@ internal static class OptimizationRegressionTests
             "override starts pristine and has independent dirty state");
         Equal("0042", cleanOverride.GetOriginalValue(CsvRowSnapshot.RowIdColumnName)!,
             "unnamed first header remains addressable as Row ID");
+    }
+
+    private static void ModuleTagSuggestionsFollowDomainInvariant()
+    {
+        var cases = new Dictionary<string, string>
+        {
+            [string.Empty] = "MODULE",
+            ["  Café / relay  "] = "CAF_RELAY",
+            ["alpha.beta--gamma"] = "ALPHA_BETA--GAMMA",
+            ["___---"] = "MODULE"
+        };
+
+        foreach (var (source, expected) in cases)
+        {
+            var suggested = GalaxyMapModule.SuggestTag(source);
+            Equal(expected, suggested, $"tag suggested from '{source}'");
+            True(GalaxyMapModule.IsValidTag(suggested), "every suggested tag satisfies the module invariant");
+        }
+
+        True(!GalaxyMapModule.IsValidTag("CAFÉ"),
+            "Unicode letters rejected by module construction are not treated as valid ASCII tags");
+        True(GalaxyMapModule.IsValidTag("lower_case-1"),
+            "validation follows constructor normalisation for lowercase input");
+    }
+
+    private static void AppearanceMetadataFollowsExplicitSchema()
+    {
+        var known = GalaxyMapPropertyCatalog.Get(GalaxyMapTable.Planet, "Horizon_Atmosphere_Intensity");
+        True(known.Description.StartsWith("Experimental: Planet shader/appearance parameter", StringComparison.Ordinal),
+            "an explicit appearance column receives appearance metadata");
+
+        var unknown = GalaxyMapPropertyCatalog.Get(GalaxyMapTable.Planet, "ThirdParty_Custom_Field");
+        True(unknown.Description.StartsWith("Advanced 2DA field", StringComparison.Ordinal),
+            "an unknown underscore column remains advanced data rather than being misclassified as appearance");
     }
 
     private static GalaxyMapLayer CreateBaseLayer()

@@ -67,4 +67,14 @@ public abstract class GalaxyMapRow : ObservableObject
         ExtraFields[name] = value;
         OnPropertyChanged($"ExtraFields[{name}]");
     }
+
+    protected static string FirstUseful(
+        string first,
+        string second,
+        string third,
+        string fallback)
+        => !string.IsNullOrWhiteSpace(first) ? first
+            : !string.IsNullOrWhiteSpace(second) ? second
+            : !string.IsNullOrWhiteSpace(third) ? third
+            : fallback;
 }

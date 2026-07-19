@@ -11,6 +11,11 @@ namespace LE1GalaxyMapEditor.Services;
 /// </summary>
 public sealed partial class GalaxyMapValidator
 {
+    private static readonly string[] PackedPlanetAppearanceColumns = PlanetAppearanceSchema.Properties
+        .Where(property => property.Editor == PlanetAppearanceEditorKind.PackedColor)
+        .SelectMany(property => property.Columns)
+        .ToArray();
+
     private static readonly GalaxyMapTable[] ReservableTables =
     [
         GalaxyMapTable.Cluster,
@@ -374,10 +379,10 @@ public sealed partial class GalaxyMapValidator
                 continue;
             }
 
-            if (suffix <= 0 || suffix > int.MaxValue / 10_000)
+            if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
             {
                 AddForRow(diagnostics, cluster, "LABEL-CLUSTER-RANGE", ValidationSeverity.Error,
-                    $"Cluster label suffix {suffix} must be positive and small enough to encode as a Relay endpoint.",
+                    "A Cluster label suffix must be in the game-supported range 1-99.",
                     nameof(Cluster.Label));
                 continue;
             }
@@ -426,10 +431,10 @@ public sealed partial class GalaxyMapValidator
                 continue;
             }
 
-            if (suffix is <= 0 or > 99)
+            if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel)
             {
                 AddForRow(diagnostics, system, "LABEL-SYSTEM-RANGE", ValidationSeverity.Error,
-                    "A System label suffix must fit the positive two-digit ActiveWorld segment (1-99).",
+                    "A System label suffix must be in the game-supported range 1-9 (System01-System09).",
                     nameof(GalaxySystem.Label));
             }
 
@@ -562,6 +567,25 @@ public sealed partial class GalaxyMapValidator
                     nameof(Planet.RingColor));
             }
 
+            foreach (var column in PackedPlanetAppearanceColumns)
+            {
+                if (!planet.ExtraFields.TryGetValue(column, out var token))
+                {
+                    continue;
+                }
+
+                if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var packed) &&
+                    packed is >= int.MinValue and <= uint.MaxValue)
+                {
+                    continue;
+                }
+
+                AddForRow(diagnostics, planet, "TYPE-PLANET-PACKED-COLOR", ValidationSeverity.Warning,
+                    $"{column} should be a signed or unsigned packed 32-bit colour value; " +
+                    $"'{token}' will render as black in the editor preview.",
+                    column);
+            }
+
             if (!TryParseLabelSuffix(planet.Label, "Planet", out var planetSuffix))
             {
                 AddForRow(diagnostics, planet, "LABEL-PLANET", ValidationSeverity.Error,
@@ -570,7 +594,7 @@ public sealed partial class GalaxyMapValidator
             }
             else
             {
-                if (planetSuffix is <= 0 or > 99)
+                if (planetSuffix is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel)
                 {
                     AddForRow(diagnostics, planet, "LABEL-PLANET-RANGE", ValidationSeverity.Error,
                         "A Planet label suffix must fit the positive two-digit ActiveWorld segment (1-99).",
@@ -615,16 +639,18 @@ public sealed partial class GalaxyMapValidator
         if (system is null || !clusters.TryGetValue(system.ClusterRowId, out var cluster) ||
             !TryParseLabelSuffix(cluster.Label, "Cluster", out var clusterSuffix) ||
             !TryParseLabelSuffix(system.Label, "System", out var systemSuffix) ||
-            systemSuffix > 99 || planetSuffix > 99)
+            clusterSuffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel ||
+            systemSuffix is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
+            planetSuffix is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel)
         {
             return;
         }
 
         var expected = ((long)clusterSuffix * 10_000) + ((long)systemSuffix * 100) + planetSuffix;
-        if (expected > int.MaxValue)
+        if (expected > GalaxyMapIdentityLimits.MaxActiveWorld)
         {
             AddForRow(diagnostics, planet, "ACTIVEWORLD-RANGE", ValidationSeverity.Error,
-                "The label chain produces an ActiveWorld value larger than a 32-bit integer.",
+                $"The label chain produces an ActiveWorld value above the game-supported maximum {GalaxyMapIdentityLimits.MaxActiveWorld}.",
                 nameof(Planet.ActiveWorld));
             return;
         }
@@ -759,7 +785,8 @@ public sealed partial class GalaxyMapValidator
         var clusterCodes = new Dictionary<int, List<Cluster>>();
         foreach (var cluster in clusters)
         {
-            if (!TryParseLabelSuffix(cluster.Label, "Cluster", out var suffix) || suffix > int.MaxValue / 10_000)
+            if (!TryParseLabelSuffix(cluster.Label, "Cluster", out var suffix) ||
+                suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
             {
                 continue;
             }

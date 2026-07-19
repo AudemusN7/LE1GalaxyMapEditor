@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using LE1GalaxyMapEditor.Infrastructure;
 using LE1GalaxyMapEditor.Models;
+using LE1GalaxyMapEditor.Services;
 
 namespace LE1GalaxyMapEditor.ViewModels;
 
@@ -14,6 +15,7 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
     private readonly Action<HierarchyNodeViewModel> _selectedAction;
     private bool _isSelected;
     private bool _isExpanded = true;
+    private bool _isVisible = true;
     private bool _suppressSelectedAction;
 
     public HierarchyNodeViewModel(
@@ -24,12 +26,19 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
         Action<GalaxyMapRow>? cloneAction = null,
         Action<GalaxyMapRow>? deleteAction = null,
         Action<GalaxyMapRow>? moveAction = null,
-        bool canMoveToParent = false)
+        Action<Planet>? openPlanetDesignerAction = null,
+        bool canMoveToParent = false,
+        Action<HierarchyNodeViewModel>? addChildAction = null,
+        Func<bool>? canAddChild = null)
     {
         Item = item;
         Parent = parent;
         _selectedAction = selectedAction;
         InstanceCount = Math.Max(1, instanceCount);
+        SupportsAddChild = item is Cluster or GalaxySystem && addChildAction is not null;
+        AddChildCommand = SupportsAddChild
+            ? new RelayCommand(() => addChildAction!(this), () => canAddChild?.Invoke() ?? true)
+            : null;
         CloneCommand = new RelayCommand(() => cloneAction?.Invoke(Item), () => cloneAction is not null);
         DeleteCommand = new RelayCommand(() => deleteAction?.Invoke(Item), () => deleteAction is not null);
         SupportsParentMove = item is GalaxySystem or Planet;
@@ -37,24 +46,44 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
         MoveCommand = new RelayCommand(
             () => moveAction?.Invoke(Item),
             () => moveAction is not null && CanMoveToParent);
+        OpenPlanetDesignerCommand = new RelayCommand(
+            () =>
+            {
+                if (Item is Planet planet) openPlanetDesignerAction?.Invoke(planet);
+            },
+            () => openPlanetDesignerAction is not null && Item is Planet planet &&
+                  PlanetAppearanceCodec.IsAppearanceCapable(planet));
         Item.PropertyChanged += ItemOnPropertyChanged;
     }
 
-    private HierarchyNodeViewModel(Action<HierarchyNodeViewModel> selectedAction)
+    private HierarchyNodeViewModel(
+        Action<HierarchyNodeViewModel> selectedAction,
+        Action<HierarchyNodeViewModel>? addChildAction,
+        Func<bool>? canAddChild)
     {
         Item = new GalaxyRootItem();
         IsGalaxyRoot = true;
         _selectedAction = selectedAction;
+        SupportsAddChild = addChildAction is not null;
+        AddChildCommand = SupportsAddChild
+            ? new RelayCommand(() => addChildAction!(this), () => canAddChild?.Invoke() ?? true)
+            : null;
+        OpenPlanetDesignerCommand = new RelayCommand(() => { }, () => false);
     }
 
-    public static HierarchyNodeViewModel CreateGalaxyRoot(Action<HierarchyNodeViewModel> selectedAction)
-        => new(selectedAction);
+    public static HierarchyNodeViewModel CreateGalaxyRoot(
+        Action<HierarchyNodeViewModel> selectedAction,
+        Action<HierarchyNodeViewModel>? addChildAction = null,
+        Func<bool>? canAddChild = null)
+        => new(selectedAction, addChildAction, canAddChild);
 
     public GalaxyMapRow Item { get; private set; }
     public GalaxyMapRow? Model => IsGalaxyRoot ? null : Item;
     public HierarchyNodeViewModel? Parent { get; }
     public ObservableCollection<HierarchyNodeViewModel> Children { get; } = [];
     public bool IsGalaxyRoot { get; }
+    public bool SupportsRowActions => !IsGalaxyRoot;
+    public bool SupportsAddChild { get; }
     public int InstanceCount { get; private set; }
     public bool HasMultipleInstances => InstanceCount > 1;
 
@@ -95,7 +124,32 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
     public RelayCommand? CloneCommand { get; }
     public RelayCommand? DeleteCommand { get; }
     public RelayCommand? MoveCommand { get; }
+    public RelayCommand OpenPlanetDesignerCommand { get; }
+    public RelayCommand? AddChildCommand { get; }
+    public string AddChildMenuHeader => Item switch
+    {
+        GalaxyRootItem => "Add Cluster",
+        Cluster => "Add System",
+        GalaxySystem => "Add Planet/Object",
+        _ => string.Empty
+    };
     public bool SupportsParentMove { get; }
+    public bool SupportsPlanetDesigner => Item is Planet planet && PlanetAppearanceCodec.IsAppearanceCapable(planet);
+    public bool IsNearBottomEdge => Item switch
+    {
+        Cluster cluster => cluster.Y >= 0.97,
+        GalaxySystem system => system.Y >= 0.97,
+        Planet planet => planet.Y >= 0.97,
+        _ => false
+    };
+    public string SystemMapToolTip => Item is Planet
+        {
+            VisualKind: PlanetVisualKind.Planet or PlanetVisualKind.RingedPlanet
+        }
+            ? "Double-click to open Planet Designer"
+            : Item is Planet planet
+                ? planet.VisualKind.ToString()
+                : ToolTipText;
     public bool CanMoveToParent { get; private set; }
     public string MoveMenuHeader => Item is GalaxySystem ? "Move to Cluster…" : "Move to System…";
 
@@ -112,6 +166,29 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
     }
 
     public bool IsExpanded { get => _isExpanded; set => SetProperty(ref _isExpanded, value); }
+    public bool IsVisible { get => _isVisible; private set => SetProperty(ref _isVisible, value); }
+
+    public bool ApplySearch(IReadOnlyList<string> terms)
+    {
+        ArgumentNullException.ThrowIfNull(terms);
+        var descendantMatches = false;
+        foreach (var child in Children)
+        {
+            descendantMatches |= child.ApplySearch(terms);
+        }
+
+        var pathText = string.Join(' ', AncestorsAndSelf().Select(node =>
+            $"{node.DisplayName} {node.ItemType} {node.ModuleTag} {(node.IsGalaxyRoot ? string.Empty : node.Item.RowId)}"));
+        var selfMatches = terms.Count == 0 || terms.All(term =>
+            pathText.Contains(term, StringComparison.OrdinalIgnoreCase));
+        IsVisible = terms.Count == 0 || selfMatches || descendantMatches;
+        if (terms.Count > 0 && IsVisible && Children.Count > 0)
+        {
+            IsExpanded = true;
+        }
+
+        return IsVisible;
+    }
 
     internal void SetSelectedSilently(bool value)
     {
@@ -152,8 +229,12 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ModuleTag));
         OnPropertyChanged(nameof(IsModuleOverride));
         OnPropertyChanged(nameof(CanMoveToParent));
+        OnPropertyChanged(nameof(SupportsPlanetDesigner));
+        OnPropertyChanged(nameof(IsNearBottomEdge));
+        OnPropertyChanged(nameof(SystemMapToolTip));
         OnPropertyChanged(nameof(MoveMenuHeader));
         MoveCommand?.RaiseCanExecuteChanged();
+        OpenPlanetDesignerCommand.RaiseCanExecuteChanged();
     }
 
     public void ExpandAncestors()
@@ -162,6 +243,12 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
         {
             ancestor.IsExpanded = true;
         }
+    }
+
+    internal void RaiseCommandStates()
+    {
+        AddChildCommand?.RaiseCanExecuteChanged();
+        OpenPlanetDesignerCommand.RaiseCanExecuteChanged();
     }
 
     public void Dispose()
@@ -193,5 +280,26 @@ public sealed class HierarchyNodeViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(IsModuleOverride));
             OnPropertyChanged(nameof(ToolTipText));
         }
+
+        if (e.PropertyName == nameof(Cluster.Y))
+        {
+            OnPropertyChanged(nameof(IsNearBottomEdge));
+        }
+
+        if (e.PropertyName == nameof(Planet.VisualKind))
+        {
+            OnPropertyChanged(nameof(SystemMapToolTip));
+        }
+    }
+
+    private IEnumerable<HierarchyNodeViewModel> AncestorsAndSelf()
+    {
+        var path = new Stack<HierarchyNodeViewModel>();
+        for (var node = this; node is not null; node = node.Parent)
+        {
+            path.Push(node);
+        }
+
+        return path;
     }
 }

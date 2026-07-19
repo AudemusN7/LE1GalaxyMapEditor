@@ -31,6 +31,7 @@
                     <Setter Property="controls:NormalizedCanvas.X" Value="{Binding Item.X}" />
                     <Setter Property="controls:NormalizedCanvas.Y" Value="{Binding Item.Y}" />
                     <Setter Property="controls:NormalizedCanvas.AnchorY" Value="25" />
+                    <Setter Property="controls:NormalizedCanvas.AnchorFromBottom" Value="{Binding IsNearBottomEdge}" />
                 </Style>
             </ItemsControl.ItemContainerStyle>
             <ItemsControl.ItemTemplate>
@@ -54,12 +55,28 @@
                         <Button.Template>
                             <ControlTemplate TargetType="Button"><ContentPresenter /></ControlTemplate>
                         </Button.Template>
-                        <StackPanel Width="155">
-                            <Grid Width="50" Height="50" HorizontalAlignment="Center"
+                        <Grid Width="155">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid x:Name="MarkerVisual" Grid.Row="0" Width="50" Height="50" HorizontalAlignment="Center"
                                   RenderTransformOrigin="0.5,0.5">
                                 <Grid.RenderTransform>
-                                    <ScaleTransform ScaleX="{Binding Item.Scale, Converter={StaticResource ObjectScaleConverter}}"
-                                                    ScaleY="{Binding Item.Scale, Converter={StaticResource ObjectScaleConverter}}" />
+                                    <ScaleTransform>
+                                        <ScaleTransform.ScaleX>
+                                            <MultiBinding Converter="{StaticResource ObjectScaleConverter}">
+                                                <Binding Path="Item.Scale" />
+                                                <Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType={x:Type UserControl}}" />
+                                            </MultiBinding>
+                                        </ScaleTransform.ScaleX>
+                                        <ScaleTransform.ScaleY>
+                                            <MultiBinding Converter="{StaticResource ObjectScaleConverter}">
+                                                <Binding Path="Item.Scale" />
+                                                <Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType={x:Type UserControl}}" />
+                                            </MultiBinding>
+                                        </ScaleTransform.ScaleY>
+                                    </ScaleTransform>
                                 </Grid.RenderTransform>
                                 <Ellipse x:Name="Glow"
                                          Fill="{Binding ModuleColor, Converter={StaticResource ModuleColorBrushConverter}}"
@@ -83,12 +100,16 @@
                                          Width="5"
                                          Height="5" />
                             </Grid>
-                            <Border x:Name="LabelBorder" Background="#BD0A1018" CornerRadius="2" Padding="5,2" HorizontalAlignment="Center">
+                            <Border x:Name="LabelBorder" Grid.Row="1" Background="#BD0A1018" CornerRadius="2" Padding="5,2" HorizontalAlignment="Center">
                                 <TextBlock Text="{Binding DisplayName}" FontSize="14" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap" />
                             </Border>
-                        </StackPanel>
+                        </Grid>
                     </Button>
                     <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsNearBottomEdge}" Value="True">
+                            <Setter TargetName="MarkerVisual" Property="Grid.Row" Value="1" />
+                            <Setter TargetName="LabelBorder" Property="Grid.Row" Value="0" />
+                        </DataTrigger>
                         <DataTrigger Binding="{Binding IsSelected}" Value="True">
                             <Setter TargetName="OuterRing" Property="Stroke" Value="#F2A33A" />
                             <Setter TargetName="MarkerRing" Property="Stroke" Value="#F2A33A" />

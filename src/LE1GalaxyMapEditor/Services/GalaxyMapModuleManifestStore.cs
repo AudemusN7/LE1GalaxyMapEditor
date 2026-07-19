@@ -13,7 +13,7 @@ namespace LE1GalaxyMapEditor.Services;
 public sealed class GalaxyMapModuleManifestStore
 {
     public const string FileName = "module.json";
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -68,7 +68,12 @@ public sealed class GalaxyMapModuleManifestStore
                     ToRange(manifest.Reservations?.Planet),
                     ToRange(manifest.Reservations?.Map),
                     ToRange(manifest.Reservations?.Relay)),
-                manifest.ClusterTextures);
+                manifest.ClusterTextures,
+                manifest.PlanetTextures?.Select(texture => new PlanetTextureLink(
+                    texture.Id ?? string.Empty,
+                    texture.InMemoryPath ?? string.Empty,
+                    texture.RelativePath ?? string.Empty,
+                    texture.Categories)).ToArray());
         }
         catch (ArgumentException exception)
         {
@@ -111,6 +116,13 @@ public sealed class GalaxyMapModuleManifestStore
             IsReadOnly = module.IsReadOnly,
             LoadOrder = module.LoadOrder,
             ClusterTextures = module.ClusterTextureLinks.ToDictionary(pair => pair.Key, pair => pair.Value),
+            PlanetTextures = module.PlanetTextureLinks.Select(texture => new PlanetTextureDto
+            {
+                Id = texture.Id,
+                InMemoryPath = texture.InMemoryPath,
+                RelativePath = texture.RelativePath,
+                Categories = texture.Categories
+            }).ToList(),
             Reservations = new ReservationDto
             {
                 Cluster = FromRange(module.Reservations.Cluster),
@@ -152,7 +164,16 @@ public sealed class GalaxyMapModuleManifestStore
         public bool IsReadOnly { get; set; }
         public int LoadOrder { get; set; }
         public Dictionary<int, string>? ClusterTextures { get; set; }
+        public List<PlanetTextureDto>? PlanetTextures { get; set; }
         public ReservationDto? Reservations { get; set; }
+    }
+
+    private sealed class PlanetTextureDto
+    {
+        public string? Id { get; set; }
+        public string? InMemoryPath { get; set; }
+        public string? RelativePath { get; set; }
+        public PlanetTextureCategory Categories { get; set; }
     }
 
     private sealed class ReservationDto

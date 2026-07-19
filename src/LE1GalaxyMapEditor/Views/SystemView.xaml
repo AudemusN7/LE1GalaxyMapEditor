@@ -41,19 +41,24 @@
                     <Setter Property="controls:NormalizedCanvas.X" Value="{Binding Item.X}" />
                     <Setter Property="controls:NormalizedCanvas.Y" Value="{Binding Item.Y}" />
                     <Setter Property="controls:NormalizedCanvas.AnchorY" Value="22" />
+                    <Setter Property="controls:NormalizedCanvas.AnchorFromBottom" Value="{Binding IsNearBottomEdge}" />
                 </Style>
             </ItemsControl.ItemContainerStyle>
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
                     <Button Command="{Binding DataContext.SelectCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                             CommandParameter="{Binding}"
+                            MouseDoubleClick="PlanetButton_OnMouseDoubleClick"
                             Cursor="Hand"
                             Background="Transparent"
                             BorderThickness="0"
                             Padding="2"
-                            ToolTip="{Binding Item.VisualKind}">
+                            ToolTip="{Binding SystemMapToolTip}">
                         <Button.ContextMenu>
                             <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                <MenuItem Header="Open Planet Designer..." Command="{Binding OpenPlanetDesignerCommand}"
+                                          Visibility="{Binding SupportsPlanetDesigner, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                <Separator Visibility="{Binding SupportsPlanetDesigner, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                                 <MenuItem Header="Clone Planet / object…" Command="{Binding CloneCommand}"/>
                                 <MenuItem Header="Move to System…" Command="{Binding MoveCommand}"/>
                                 <Separator/>
@@ -63,12 +68,28 @@
                         <Button.Template>
                             <ControlTemplate TargetType="Button"><ContentPresenter /></ControlTemplate>
                         </Button.Template>
-                        <StackPanel Width="132">
-                            <Grid Width="44" Height="44" HorizontalAlignment="Center"
+                        <Grid Width="132">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid x:Name="MarkerVisual" Grid.Row="0" Width="44" Height="44" HorizontalAlignment="Center"
                                   RenderTransformOrigin="0.5,0.5">
                                 <Grid.RenderTransform>
-                                    <ScaleTransform ScaleX="{Binding Item.Scale, Converter={StaticResource ObjectScaleConverter}}"
-                                                    ScaleY="{Binding Item.Scale, Converter={StaticResource ObjectScaleConverter}}" />
+                                    <ScaleTransform>
+                                        <ScaleTransform.ScaleX>
+                                            <MultiBinding Converter="{StaticResource ObjectScaleConverter}">
+                                                <Binding Path="Item.Scale" />
+                                                <Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType={x:Type UserControl}}" />
+                                            </MultiBinding>
+                                        </ScaleTransform.ScaleX>
+                                        <ScaleTransform.ScaleY>
+                                            <MultiBinding Converter="{StaticResource ObjectScaleConverter}">
+                                                <Binding Path="Item.Scale" />
+                                                <Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType={x:Type UserControl}}" />
+                                            </MultiBinding>
+                                        </ScaleTransform.ScaleY>
+                                    </ScaleTransform>
                                 </Grid.RenderTransform>
                                 <Ellipse x:Name="SelectionRing" Stroke="Transparent" StrokeThickness="2" Width="41" Height="41" />
                                 <TextBlock x:Name="ObjectGlyph"
@@ -83,12 +104,16 @@
                                     </TextBlock.Effect>
                                 </TextBlock>
                             </Grid>
-                            <Border x:Name="LabelBorder" Background="#C4070B10" CornerRadius="2" Padding="4,2" HorizontalAlignment="Center">
+                            <Border x:Name="LabelBorder" Grid.Row="1" Background="#C4070B10" CornerRadius="2" Padding="4,2" HorizontalAlignment="Center">
                                 <TextBlock Text="{Binding DisplayName}" FontSize="14" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="126" />
                             </Border>
-                        </StackPanel>
+                        </Grid>
                     </Button>
                     <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsNearBottomEdge}" Value="True">
+                            <Setter TargetName="MarkerVisual" Property="Grid.Row" Value="1" />
+                            <Setter TargetName="LabelBorder" Property="Grid.Row" Value="0" />
+                        </DataTrigger>
                         <DataTrigger Binding="{Binding IsSelected}" Value="True">
                             <Setter TargetName="SelectionRing" Property="Stroke" Value="#F2A33A" />
                             <Setter TargetName="ObjectGlyph" Property="Foreground" Value="#F2A33A" />

@@ -59,7 +59,4 @@ public sealed class Cluster : GalaxyMapRow
     public ObservableCollection<GalaxySystem> Systems { get; } = [];
 
     public string DisplayName => FirstUseful(NameText, Label, Name.ToString(), $"Cluster {RowId}");
-
-    private static string FirstUseful(params string[] values)
-        => values.First(value => !string.IsNullOrWhiteSpace(value));
 }

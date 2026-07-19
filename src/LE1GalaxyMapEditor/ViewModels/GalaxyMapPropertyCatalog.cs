@@ -1,5 +1,6 @@
 using System.Text;
 using LE1GalaxyMapEditor.Models;
+using LE1GalaxyMapEditor.Services;
 
 namespace LE1GalaxyMapEditor.ViewModels;
 
@@ -22,16 +23,16 @@ public static class GalaxyMapPropertyCatalog
         return (table, column.ToUpperInvariant()) switch
         {
             (_, "ROW ID") => new("Row ID", "Confirmed: the actual 2DA row index. This is separate from the numbered Label and derived ActiveWorld ID."),
-            (GalaxyMapTable.Cluster, "LABEL") => new("Label", "Confirmed: internal ClusterNN label. Its numeric suffix × 10,000 is used by Relay endpoints and descendant ActiveWorld IDs."),
-            (GalaxyMapTable.System, "LABEL") => new("Label", "Confirmed: internal SystemNN label. Its numeric suffix × 100 contributes to descendant ActiveWorld IDs and must be unique inside the Cluster."),
-            (GalaxyMapTable.Planet, "LABEL") => new("Label", "Confirmed: internal PlanetNN label. Its numeric suffix contributes directly to ActiveWorld and must be unique inside the System."),
+            (GalaxyMapTable.Cluster, "LABEL") => new("Label", "Confirmed: internal Cluster01-Cluster99 label. Its numeric suffix × 10,000 is used by Relay endpoints and descendant ActiveWorld IDs."),
+            (GalaxyMapTable.System, "LABEL") => new("Label", "Confirmed: internal System01-System09 label. Its numeric suffix × 100 contributes to descendant ActiveWorld IDs and must be unique inside the Cluster."),
+            (GalaxyMapTable.Planet, "LABEL") => new("Label", "Confirmed: internal Planet01-Planet99 label. Its numeric suffix contributes directly to ActiveWorld and must be unique inside the System."),
             (_, "NAME") => new("Name (TLK)", "Confirmed: localised TLK string reference used for the displayed name."),
             (_, "NAMETEXT") => new("Internal name", "Confirmed: non-localised internal/editor-facing name."),
             (_, "X") => new("Map X", "Confirmed: horizontal position on this map, normally from 0 to 1."),
             (_, "Y") => new("Map Y", "Confirmed: vertical position on this map, normally from 0 to 1."),
             (GalaxyMapTable.System, "CLUSTER") => new("Parent Cluster", "Confirmed: row ID of the Cluster containing this System."),
             (GalaxyMapTable.Planet, "SYSTEM") => new("Parent System", "Confirmed: row ID of the System containing this object."),
-            (GalaxyMapTable.Planet, "ACTIVEWORLD") => new("ActiveWorld ID", "Derived: Cluster suffix × 10,000 + System suffix × 100 + Planet suffix. The editor maintains this automatically."),
+            (GalaxyMapTable.Planet, "ACTIVEWORLD") => new("ActiveWorld ID", "Derived: Cluster suffix × 10,000 + System suffix × 100 + Planet suffix. The maximum supported value is 990999; the editor maintains it automatically."),
             (GalaxyMapTable.Planet, "DESCRIPTION") => new("Description (TLK)", "Confirmed: localised TLK string reference for the object description."),
             (GalaxyMapTable.Planet, "BUTTONLABEL") => new("Use button (TLK)", "Confirmed: localised TLK string reference for the button used to interact with the object."),
             (GalaxyMapTable.Planet, "MAP") => new("Linked Map", "Confirmed: Map-table row ID, or -1 when no destination is linked."),
@@ -62,7 +63,7 @@ public static class GalaxyMapPropertyCatalog
             (GalaxyMapTable.Relay, "STARTCLUSTER") => new("Start Cluster", "Confirmed: encoded Cluster label suffix × 10,000."),
             (GalaxyMapTable.Relay, "ENDCLUSTER") => new("End Cluster", "Confirmed: encoded Cluster label suffix × 10,000."),
             (GalaxyMapTable.PlotPlanet, "CODE") => new("ActiveWorld code", "Derived: must equal the linked Planet's ActiveWorld value."),
-            (GalaxyMapTable.Planet, _) when IsAppearanceColumn(column) =>
+            (GalaxyMapTable.Planet, _) when PlanetAppearanceSchema.IsAppearanceColumn(column) =>
                 new(CompactAppearanceName(column), $"Experimental: Planet shader/appearance parameter. Exact rendering behaviour is not yet documented. Raw column: {column}."),
             _ => new(Humanize(column), "Advanced 2DA field. Its precise runtime behaviour has not yet been documented by this editor.")
         };
@@ -97,9 +98,6 @@ public static class GalaxyMapPropertyCatalog
         metadata = null!;
         return false;
     }
-
-    private static bool IsAppearanceColumn(string column)
-        => column.Equals("Shader", StringComparison.OrdinalIgnoreCase) || column.Contains('_');
 
     private static string LegacyEventName(string column) => column.ToUpperInvariant() switch
     {

@@ -86,14 +86,9 @@ public partial class App : Application
             viewModel = new MainViewModel(new CsvGalaxyMapLoader(), textures);
         }
 
-        using (_startupTrace.Measure("Load built-in CSV tables"))
+        using (_startupTrace.Measure("Load BASEGAME and remembered modules"))
         {
-            viewModel.LoadBuiltIn();
-        }
-
-        using (_startupTrace.Measure("Restore remembered modules"))
-        {
-            viewModel.RestoreRememberedModules();
+            viewModel.LoadRememberedWorkspace();
         }
 
         if (arguments.Count > 0 && Directory.Exists(arguments[0]))

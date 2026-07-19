@@ -5,8 +5,6 @@ namespace LE1GalaxyMapEditor.Models;
 
 public sealed partial class GalaxyMapDocument
 {
-    private readonly List<string> _baseWarnings = [];
-
     public string SourceFolder { get; internal set; } = string.Empty;
     public bool IsSourceReadOnly => true;
 
@@ -29,60 +27,6 @@ public sealed partial class GalaxyMapDocument
     public IReadOnlyDictionary<int, MapEntry> MapsByRowId { get; private set; }
         = new Dictionary<int, MapEntry>();
 
-    internal void AddBaseWarning(string warning) => _baseWarnings.Add(warning);
-
-    public PlotPlanetEntry CreatePlotPlanetFor(Planet planet)
-    {
-        if (!Planets.Contains(planet))
-        {
-            throw new InvalidOperationException("The Planet does not belong to this document.");
-        }
-
-        var existing = PlotPlanets.FirstOrDefault(row => row.RowId == planet.RowId);
-        if (existing is not null)
-        {
-            return existing;
-        }
-
-        if (Planets.Count(candidate => candidate.RowId == planet.RowId) != 1)
-        {
-            throw new InvalidOperationException($"Planet row ID {planet.RowId} is ambiguous and cannot receive PlotPlanet data.");
-        }
-
-        var plotPlanet = new PlotPlanetEntry
-        {
-            RowId = planet.RowId,
-            Code = TryDerivePlotPlanetCode(planet, out var code) ? code : planet.ActiveWorld,
-            Name = planet.Name,
-            NameText = planet.NameText
-        };
-        SeedExtraColumns(plotPlanet, PlotPlanets.FirstOrDefault());
-        PlotPlanets.Add(plotPlanet);
-        return plotPlanet;
-    }
-
-    public MapEntry CreateMapFor(Planet planet)
-    {
-        if (!Planets.Contains(planet))
-        {
-            throw new InvalidOperationException("The Planet does not belong to this document.");
-        }
-
-        if (planet.LinkedMap is not null)
-        {
-            return planet.LinkedMap;
-        }
-
-        var rowId = planet.MapRowId >= 0 && Maps.All(map => map.RowId != planet.MapRowId)
-            ? planet.MapRowId
-            : NextRowId(Maps);
-        var map = new MapEntry { RowId = rowId };
-        SeedExtraColumns(map, Maps.FirstOrDefault());
-        Maps.Add(map);
-        planet.MapRowId = rowId;
-        return map;
-    }
-
     public IReadOnlyList<RelayConnection> GetRelaysForCluster(Cluster cluster)
         => Relays.Where(relay => ReferenceEquals(relay.StartCluster, cluster) || ReferenceEquals(relay.EndCluster, cluster))
             .ToArray();
@@ -98,7 +42,7 @@ public sealed partial class GalaxyMapDocument
             return false;
         }
 
-        if (suffix > int.MaxValue / 10_000)
+        if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
         {
             error = $"Cluster label '{cluster.Label}' is too large to encode as a Relay endpoint.";
             return false;
@@ -119,54 +63,9 @@ public sealed partial class GalaxyMapDocument
         return true;
     }
 
-    public bool TryAddRelay(
-        Cluster source,
-        Cluster target,
-        out RelayConnection? relay,
-        out string error)
-    {
-        relay = null;
-        if (ReferenceEquals(source, target))
-        {
-            error = "A Cluster cannot have a Relay connection to itself.";
-            return false;
-        }
-
-        if (!TryGetRelayCode(source, out var startCode, out error) ||
-            !TryGetRelayCode(target, out var endCode, out error))
-        {
-            return false;
-        }
-
-        if (Relays.Any(candidate =>
-                (candidate.StartClusterEncoded == startCode && candidate.EndClusterEncoded == endCode) ||
-                (candidate.StartClusterEncoded == endCode && candidate.EndClusterEncoded == startCode)))
-        {
-            error = $"{source.DisplayName} and {target.DisplayName} already have a Relay connection.";
-            return false;
-        }
-
-        relay = new RelayConnection
-        {
-            RowId = NextRowId(Relays),
-            StartClusterEncoded = startCode,
-            EndClusterEncoded = endCode
-        };
-        SeedExtraColumns(relay, Relays.FirstOrDefault());
-        Relays.Add(relay);
-        error = string.Empty;
-        return true;
-    }
-
-    public bool RemoveRelay(RelayConnection relay) => Relays.Remove(relay);
-
     public void RebuildRelationships()
     {
         Warnings.Clear();
-        foreach (var warning in _baseWarnings)
-        {
-            Warnings.Add(warning);
-        }
 
         ClustersByRowId = BuildIndex(Clusters, "Cluster");
         SystemsByRowId = BuildIndex(Systems, "System");
@@ -265,7 +164,7 @@ public sealed partial class GalaxyMapDocument
                 continue;
             }
 
-            if (suffix > int.MaxValue / 10_000)
+            if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
             {
                 Warnings.Add($"Cluster row {cluster.RowId} label '{cluster.Label}' is too large to encode as a Relay endpoint.");
                 continue;
@@ -310,50 +209,4 @@ public sealed partial class GalaxyMapDocument
     [GeneratedRegex("^Cluster(?<number>\\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ClusterLabelPattern();
 
-    private bool TryDerivePlotPlanetCode(Planet planet, out int code)
-    {
-        code = 0;
-        if (planet.System?.Cluster is not { } cluster ||
-            !TryParseLabelSuffix(cluster.Label, "Cluster", out var clusterNumber) ||
-            !TryParseLabelSuffix(planet.System.Label, "System", out var systemNumber) ||
-            !TryParseLabelSuffix(planet.Label, "Planet", out var planetNumber))
-        {
-            return false;
-        }
-
-        var calculated = ((long)clusterNumber * 10_000) + ((long)systemNumber * 100) + planetNumber;
-        if (calculated is < int.MinValue or > int.MaxValue)
-        {
-            return false;
-        }
-
-        code = (int)calculated;
-        return true;
-    }
-
-    private static bool TryParseLabelSuffix(string label, string prefix, out int number)
-    {
-        number = 0;
-        return label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
-               int.TryParse(label[prefix.Length..], out number);
-    }
-
-    private static int NextRowId<T>(IEnumerable<T> rows) where T : GalaxyMapRow
-    {
-        var existing = rows.Select(row => row.RowId).ToArray();
-        return existing.Length == 0 ? 0 : checked(existing.Max() + 1);
-    }
-
-    private static void SeedExtraColumns(GalaxyMapRow target, GalaxyMapRow? template)
-    {
-        if (template is null)
-        {
-            return;
-        }
-
-        foreach (var name in template.ExtraFieldOrder)
-        {
-            target.AddExtraField(name, string.Empty);
-        }
-    }
 }

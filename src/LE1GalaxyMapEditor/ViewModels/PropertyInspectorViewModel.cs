@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Media;
 using LE1GalaxyMapEditor.Infrastructure;
 using LE1GalaxyMapEditor.Models;
+using LE1GalaxyMapEditor.Presentation;
 using LE1GalaxyMapEditor.Services;
 
 namespace LE1GalaxyMapEditor.ViewModels;
@@ -76,7 +77,10 @@ public sealed class InspectorFieldViewModel : ObservableObject
             if (Name.Equals("RingColor", StringComparison.OrdinalIgnoreCase) && packed == -1)
                 return Brushes.Transparent;
             var argb = unchecked((uint)packed);
-            return new SolidColorBrush(Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb));
+            // Galaxy-map packed colours commonly leave the high alpha byte at
+            // zero. Alpha is data that must be preserved, but a transparent
+            // UI swatch only reveals the navy control background.
+            return new SolidColorBrush(Color.FromRgb((byte)(argb >> 16), (byte)(argb >> 8), (byte)argb));
         }
     }
 
@@ -170,75 +174,16 @@ public sealed class PropertyInspectorViewModel : ObservableObject
 {
     public static GridLength LabelColumnWidth { get; } = new(146);
 
-    private readonly Action<Planet>? _addPlotPlanet;
-    private readonly Action<Planet>? _addMap;
-    private readonly Func<Cluster, IReadOnlyList<RelayConnection>>? _getClusterRelays;
-    private readonly Action<Cluster>? _beginRelayCreation;
-    private readonly Action<RelayConnection>? _removeRelay;
-    private readonly Action<Cluster, RelayConnection>? _beginRelayRedirect;
-    private readonly Func<RelayConnection, bool>? _canBreakRelay;
-    private readonly Action<Cluster>? _linkClusterTexture;
-    private readonly Action<Planet>? _deleteLinkedPlotPlanet;
-    private readonly Action<Planet>? _deleteLinkedMap;
-    private readonly Action? _beforeEdit;
-    private readonly Func<GalaxyMapRow, string, object?, bool>? _managedEdit;
-    private readonly Action<Planet>? _configureLandableDestination;
-    private readonly Func<IReadOnlyList<InspectorFieldOption>> _clusterOptions;
-    private readonly Func<IReadOnlyList<InspectorFieldOption>> _systemOptions;
-    private readonly Func<IReadOnlyList<InspectorFieldOption>> _mapOptions;
-    private readonly Func<IReadOnlyList<InspectorFieldOption>> _relayClusterOptions;
-    private readonly Func<Cluster, bool>? _isRelaySource;
-    private readonly Action? _cancelRelayCreation;
-    private readonly Func<bool> _canEdit;
+    private readonly IInspectorPresentationWorkflow _workflow;
     private string _title = "Nothing selected";
     private string _subtitle = "Select an item in the hierarchy or on the map.";
     private bool _hasSelection;
     private bool _currentEditable = true;
     private GalaxyMapTable _currentTable;
+    private GalaxyMapRow? _currentRow;
 
-    public PropertyInspectorViewModel(
-        Action<Planet>? addPlotPlanet = null,
-        Action<Planet>? addMap = null,
-        Func<Cluster, IReadOnlyList<RelayConnection>>? getClusterRelays = null,
-        Action<Cluster>? beginRelayCreation = null,
-        Action<RelayConnection>? removeRelay = null,
-        Func<Cluster, bool>? isRelaySource = null,
-        Action? cancelRelayCreation = null,
-        Func<bool>? canEdit = null,
-        Action<Cluster, RelayConnection>? beginRelayRedirect = null,
-        Func<RelayConnection, bool>? canBreakRelay = null,
-        Action<Cluster>? linkClusterTexture = null,
-        Action<Planet>? deleteLinkedPlotPlanet = null,
-        Action<Planet>? deleteLinkedMap = null,
-        Action? beforeEdit = null,
-        Func<GalaxyMapRow, string, object?, bool>? managedEdit = null,
-        Action<Planet>? configureLandableDestination = null,
-        Func<IReadOnlyList<InspectorFieldOption>>? clusterOptions = null,
-        Func<IReadOnlyList<InspectorFieldOption>>? systemOptions = null,
-        Func<IReadOnlyList<InspectorFieldOption>>? mapOptions = null,
-        Func<IReadOnlyList<InspectorFieldOption>>? relayClusterOptions = null)
-    {
-        _addPlotPlanet = addPlotPlanet;
-        _addMap = addMap;
-        _getClusterRelays = getClusterRelays;
-        _beginRelayCreation = beginRelayCreation;
-        _removeRelay = removeRelay;
-        _beginRelayRedirect = beginRelayRedirect;
-        _canBreakRelay = canBreakRelay;
-        _linkClusterTexture = linkClusterTexture;
-        _deleteLinkedPlotPlanet = deleteLinkedPlotPlanet;
-        _deleteLinkedMap = deleteLinkedMap;
-        _beforeEdit = beforeEdit;
-        _managedEdit = managedEdit;
-        _configureLandableDestination = configureLandableDestination;
-        _clusterOptions = clusterOptions ?? (() => []);
-        _systemOptions = systemOptions ?? (() => []);
-        _mapOptions = mapOptions ?? (() => []);
-        _relayClusterOptions = relayClusterOptions ?? (() => []);
-        _isRelaySource = isRelaySource;
-        _cancelRelayCreation = cancelRelayCreation;
-        _canEdit = canEdit ?? (() => true);
-    }
+    public PropertyInspectorViewModel(IInspectorPresentationWorkflow? workflow = null)
+        => _workflow = workflow ?? NullInspectorPresentationWorkflow.Instance;
 
     public ObservableCollection<InspectorSectionViewModel> Sections { get; } = [];
     public string Title { get => _title; private set => SetProperty(ref _title, value); }
@@ -248,6 +193,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
     public void InspectGalaxy()
     {
         Sections.Clear();
+        _currentRow = null;
         HasSelection = true;
         Title = "The Milky Way";
         Subtitle = "Galaxy overview";
@@ -257,8 +203,9 @@ public sealed class PropertyInspectorViewModel : ObservableObject
     {
         Sections.Clear();
         HasSelection = row is not null;
-        _currentEditable = isEditable ?? _canEdit();
+        _currentEditable = isEditable ?? _workflow.CanEdit;
         _currentTable = row?.Table ?? default;
+        _currentRow = row;
 
         if (row is null)
         {
@@ -321,18 +268,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
         AddExtraFields(row, "Visibility and usability", availability,
             detail: "Independent three-part rules. Always = 1 / 974 / 1.");
         AddRemainingExtraFields(row, "Advanced Cluster fields", clusterAppearance.Concat(availability), isExpanded: false);
-        if (_linkClusterTexture is not null)
-        {
-            Sections.Add(new InspectorSectionViewModel("Cluster background texture", actions:
-            [
-                new InspectorActionViewModel(
-                    "Link module texture…",
-                    () => _linkClusterTexture(row),
-                    "Choose a PNG to stage inside the target module's textures folder.",
-                    isPrimary: true)
-            ]));
-        }
-        AddClusterRelays(row);
+        AddWorkflowActionSections(row, "Cluster background texture", "Relay connections");
     }
 
     private void AddSystem(GalaxySystem row)
@@ -342,7 +278,8 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             Text("Label", () => row.Label, value => SetManaged(row, nameof(GalaxySystem.Label), value, () => row.Label = value)),
             Int("Name", () => row.Name, value => SetManaged(row, nameof(GalaxySystem.Name), value, () => row.Name = value)),
             Text("NameText", () => row.NameText, value => SetManaged(row, nameof(GalaxySystem.NameText), value, () => row.NameText = value)),
-            Dropdown("Cluster", () => row.ClusterRowId, value => SetManaged(row, nameof(GalaxySystem.ClusterRowId), value, () => row.ClusterRowId = value), _clusterOptions()),
+            Dropdown("Cluster", () => row.ClusterRowId, value => SetManaged(row, nameof(GalaxySystem.ClusterRowId), value, () => row.ClusterRowId = value),
+                _workflow.GetOptions(InspectorOptionSet.Clusters)),
             Number("X", () => row.X, value => row.X = value),
             Number("Y", () => row.Y, value => row.Y = value),
             Number("Scale", () => row.Scale, value => row.Scale = value),
@@ -364,9 +301,11 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             Text("Label", () => row.Label, value => SetManaged(row, nameof(Planet.Label), value, () => row.Label = value)),
             Int("Name", () => row.Name, value => SetManaged(row, nameof(Planet.Name), value, () => row.Name = value)),
             Text("NameText", () => row.NameText, value => SetManaged(row, nameof(Planet.NameText), value, () => row.NameText = value)),
-            Dropdown("System", () => row.SystemRowId, value => SetManaged(row, nameof(Planet.SystemRowId), value, () => row.SystemRowId = value), _systemOptions()),
+            Dropdown("System", () => row.SystemRowId, value => SetManaged(row, nameof(Planet.SystemRowId), value, () => row.SystemRowId = value),
+                _workflow.GetOptions(InspectorOptionSet.Systems)),
             ReadOnlyInt("ActiveWorld", () => row.ActiveWorld),
-            Dropdown("Map", () => row.MapRowId, value => row.MapRowId = value, _mapOptions())
+            Dropdown("Map", () => row.MapRowId, value => row.MapRowId = value,
+                _workflow.GetOptions(InspectorOptionSet.Maps))
         ], detail: "Identity and managed relationships. ActiveWorld is derived from the numbered label chain."));
         Sections.Add(new InspectorSectionViewModel("System-view display", [
             Number("X", () => row.X, value => row.X = value),
@@ -388,53 +327,18 @@ public sealed class PropertyInspectorViewModel : ObservableObject
         ], detail: "Localised text, use-button behaviour and the Kismet Remote Event."));
         AddPlanetExtraFields(row);
 
-        var relationshipActions = new List<InspectorActionViewModel>();
-        var isAsteroidBelt = row.OrbitRing == 2;
-        if (!isAsteroidBelt && _configureLandableDestination is not null)
-        {
-            relationshipActions.Add(new InspectorActionViewModel(
-                row.LinkedMap is null ? "Configure landable destination…" : "Edit landable destination…",
-                () => _configureLandableDestination(row),
-                "Creates or updates the linked Map, StartPoint, Remote Event and optional use-button TLK.",
-                isPrimary: true));
-        }
-        if (row.PlotPlanet is null && _addPlotPlanet is not null)
-        {
-            relationshipActions.Add(new InspectorActionViewModel(
-                "Add PlotPlanet properties",
-                () => _addPlotPlanet(row),
-                "Creates a PlotPlanet _part row in the active module using this Planet's row ID.",
-                isPrimary: true));
-        }
-
-        if (!isAsteroidBelt && row.LinkedMap is null && _addMap is not null)
-        {
-            relationshipActions.Add(new InspectorActionViewModel(
-                "Add linked Map",
-                () => _addMap(row),
-                "Creates a blank linked Map row for manual configuration.",
-                isPrimary: false));
-        }
-
-        if (relationshipActions.Count > 0)
-        {
-            Sections.Add(new InspectorSectionViewModel("Optional relationships", actions: relationshipActions));
-        }
+        AddWorkflowActionSections(row, "Optional relationships");
 
         if (row.PlotPlanet is not null)
         {
             AddPlotPlanet(row.PlotPlanet, "Linked PlotPlanet", false);
-            if (_deleteLinkedPlotPlanet is not null)
-                Sections.Add(new InspectorSectionViewModel("Linked PlotPlanet actions", actions:
-                    [new("Delete linked PlotPlanet", () => _deleteLinkedPlotPlanet(row), "Stages removal of the module-owned linked row.", isDestructive: true)]));
+            AddWorkflowActionSections(row, "Linked PlotPlanet actions");
         }
 
         if (row.LinkedMap is not null)
         {
             AddMap(row.LinkedMap, "Linked Map", false);
-            if (_deleteLinkedMap is not null)
-                Sections.Add(new InspectorSectionViewModel("Linked Map actions", actions:
-                    [new("Delete linked Map", () => _deleteLinkedMap(row), "Stages removal of the module-owned Map and clears the Planet link.", isDestructive: true)]));
+            AddWorkflowActionSections(row, "Linked Map actions");
         }
     }
 
@@ -477,63 +381,29 @@ public sealed class PropertyInspectorViewModel : ObservableObject
     {
         Sections.Add(new InspectorSectionViewModel("Relay", [
             Int("Row ID", () => row.RowId, value => row.RowId = value),
-            Dropdown("StartCluster", () => row.StartClusterEncoded, value => row.StartClusterEncoded = value, _relayClusterOptions()),
-            Dropdown("EndCluster", () => row.EndClusterEncoded, value => row.EndClusterEncoded = value, _relayClusterOptions())
+            Dropdown("StartCluster", () => row.StartClusterEncoded, value => row.StartClusterEncoded = value,
+                _workflow.GetOptions(InspectorOptionSet.RelayClusters)),
+            Dropdown("EndCluster", () => row.EndClusterEncoded, value => row.EndClusterEncoded = value,
+                _workflow.GetOptions(InspectorOptionSet.RelayClusters))
         ]));
         AddExtraFields(row, "Other Relay columns");
     }
 
-    private void AddClusterRelays(Cluster cluster)
+    private void AddWorkflowActionSections(GalaxyMapRow row, params string[] sectionNames)
     {
-        if (_getClusterRelays is null || _beginRelayCreation is null || _removeRelay is null)
+        var requested = sectionNames.ToHashSet(StringComparer.Ordinal);
+        foreach (var group in _workflow.GetActions(row)
+                     .Where(action => requested.Contains(action.Section))
+                     .GroupBy(action => action.Section))
         {
-            return;
+            var actions = group.Select(action => new InspectorActionViewModel(
+                action.Label,
+                () => _workflow.ExecuteAction(row, action),
+                action.Detail,
+                action.IsPrimary,
+                action.IsDestructive)).ToArray();
+            Sections.Add(new InspectorSectionViewModel(group.Key, actions: actions));
         }
-
-        var actions = new List<InspectorActionViewModel>();
-        foreach (var relay in _getClusterRelays(cluster))
-        {
-            var otherCluster = ReferenceEquals(relay.StartCluster, cluster) ? relay.EndCluster : relay.StartCluster;
-            var otherCode = ReferenceEquals(relay.StartCluster, cluster)
-                ? relay.EndClusterEncoded
-                : relay.StartClusterEncoded;
-            var destination = otherCluster?.DisplayName ?? $"unresolved Cluster{otherCode / 10_000:00} ({otherCode})";
-            if (_beginRelayRedirect is not null)
-            {
-                actions.Add(new InspectorActionViewModel(
-                    $"Redirect connection from {destination}…",
-                    () => _beginRelayRedirect(cluster, relay),
-                    $"Overrides Relay row {relay.RowId}; then click its new destination Cluster.",
-                    isPrimary: true));
-            }
-
-            if (_canBreakRelay?.Invoke(relay) ?? true)
-            {
-                actions.Add(new InspectorActionViewModel(
-                    $"Break connection to {destination}",
-                    () => _removeRelay(relay),
-                    $"Removes active-module Relay row {relay.RowId}.",
-                    isDestructive: true));
-            }
-        }
-
-        if (_isRelaySource?.Invoke(cluster) == true && _cancelRelayCreation is not null)
-        {
-            actions.Add(new InspectorActionViewModel(
-                "Cancel relay edit",
-                _cancelRelayCreation,
-                "Return to normal Cluster selection."));
-        }
-        else
-        {
-            actions.Add(new InspectorActionViewModel(
-                "Add relay connection…",
-                () => _beginRelayCreation(cluster),
-                "Then click another Cluster on the Galaxy view.",
-                isPrimary: true));
-        }
-
-        Sections.Add(new InspectorSectionViewModel("Relay connections", actions: actions));
     }
 
     private void AddPlanetExtraFields(Planet row)
@@ -546,13 +416,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             "EventTransitionParameter", "EventMessage"
         };
         var destinationInternals = new[] { "ExitMap", "PlanetRotation" };
-        var appearanceStart = Array.FindIndex(names,
-            name => string.Equals(name, "Shader", StringComparison.OrdinalIgnoreCase));
-        var appearanceEnd = Array.FindIndex(names,
-            name => string.Equals(name, "Corona_ColorA", StringComparison.OrdinalIgnoreCase));
-        var appearance = appearanceStart >= 0 && appearanceEnd >= appearanceStart
-            ? names.Skip(appearanceStart).Take(appearanceEnd - appearanceStart + 1).ToArray()
-            : [];
+        var appearance = names.Where(PlanetAppearanceSchema.IsAppearanceColumn).ToArray();
 
         AddExtraFields(row, "Visibility and usability", availability,
             detail: "Visibility, object interaction and use-button rules are independent three-part rules.");
@@ -560,8 +424,6 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             detail: "Rare or unverified fields kept available without cluttering routine editing.");
         AddExtraFields(row, "Legacy event routing", legacyEvents, isExpanded: false,
             detail: "Unused by vanilla; Remote Event handles normal destination behaviour.");
-        AddExtraFields(row, "Planet appearance", appearance, isExpanded: false,
-            detail: "Shader and material parameters. Preserved exactly when cloning.");
         AddRemainingExtraFields(row, "Advanced Planet fields",
             availability.Concat(destinationInternals).Concat(legacyEvents).Concat(appearance), isExpanded: false);
     }
@@ -583,7 +445,11 @@ public sealed class PropertyInspectorViewModel : ObservableObject
         var fields = names
             .Select(name => new InspectorFieldViewModel(name, row.ExtraFields[name], false, forceReadOnly || !_currentEditable, value =>
             {
-                _beforeEdit?.Invoke();
+                if (Validate(row, $"ExtraFields[{name}]", value) is { } error)
+                {
+                    return error;
+                }
+                _workflow.BeginEdit();
                 SetManaged(row, $"ExtraFields[{name}]", value, () => row.SetExtraField(name, value));
                 return null;
             }, ExtraEditor(name), ExtraOptions(name), GalaxyMapPropertyCatalog.Get(row.Table, name)))
@@ -632,7 +498,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
 
     private void SetManaged<T>(GalaxyMapRow row, string propertyName, T value, Action fallback)
     {
-        if (_managedEdit?.Invoke(row, propertyName, value) != true)
+        if (!_workflow.ApplyManagedEdit(row, propertyName, value))
         {
             fallback();
         }
@@ -640,8 +506,8 @@ public sealed class PropertyInspectorViewModel : ObservableObject
 
     private void SetAvailabilityAlways(GalaxyMapRow row, IReadOnlyList<string> fields)
     {
-        _beforeEdit?.Invoke();
-        if (_managedEdit?.Invoke(row, "AvailabilityAlways", fields.ToArray()) == true)
+        _workflow.BeginEdit();
+        if (_workflow.ApplyManagedEdit(row, "AvailabilityAlways", fields.ToArray()))
         {
             return;
         }
@@ -660,7 +526,8 @@ public sealed class PropertyInspectorViewModel : ObservableObject
         string name, Func<string> getter, Action<string> setter, bool isMain = true)
         => new(name, getter(), isMain, IsReadOnly(name), value =>
         {
-            _beforeEdit?.Invoke();
+            if (ValidateCurrent(name, value) is { } error) return error;
+            _workflow.BeginEdit();
             setter(value);
             return null;
         }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
@@ -678,7 +545,8 @@ public sealed class PropertyInspectorViewModel : ObservableObject
                 return "Enter a whole number.";
             }
 
-            _beforeEdit?.Invoke(); setter(parsed);
+            if (ValidateCurrent(name, parsed) is { } error) return error;
+            _workflow.BeginEdit(); setter(parsed);
             return null;
         }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
 
@@ -692,7 +560,8 @@ public sealed class PropertyInspectorViewModel : ObservableObject
         {
             if (string.IsNullOrWhiteSpace(value))
             {
-                _beforeEdit?.Invoke(); setter(null);
+                if (ValidateCurrent(name, null) is { } nullError) return nullError;
+                _workflow.BeginEdit(); setter(null);
                 return null;
             }
 
@@ -701,20 +570,8 @@ public sealed class PropertyInspectorViewModel : ObservableObject
                 return "Enter a whole number or leave this blank.";
             }
 
-            _beforeEdit?.Invoke(); setter(parsed);
-            return null;
-        }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
-
-    private InspectorFieldViewModel Long(
-        string name, Func<long> getter, Action<long> setter, bool isMain = true)
-        => new(name, getter().ToString(CultureInfo.InvariantCulture), isMain, IsReadOnly(name), value =>
-        {
-            if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
-            {
-                return "Enter a whole number.";
-            }
-
-            _beforeEdit?.Invoke(); setter(parsed);
+            if (ValidateCurrent(name, parsed) is { } error) return error;
+            _workflow.BeginEdit(); setter(parsed);
             return null;
         }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
 
@@ -733,29 +590,74 @@ public sealed class PropertyInspectorViewModel : ObservableObject
                 return "Enter a value with no more than two decimal places.";
             }
 
-            _beforeEdit?.Invoke(); setter(parsed);
+            if (ValidateCurrent(name, parsed) is { } error) return error;
+            _workflow.BeginEdit(); setter(parsed);
             return null;
         }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
 
     private InspectorFieldViewModel Checkbox(string name, Func<int> getter, Action<int> setter)
         => new(name, getter() == 0 ? "0" : "1", true, IsReadOnly(name), value =>
-        { _beforeEdit?.Invoke(); setter(value == "1" ? 1 : 0); return null; }, InspectorEditorKind.Checkbox,
+        {
+            var parsed = value == "1" ? 1 : 0;
+            if (ValidateCurrent(name, parsed) is { } error) return error;
+            _workflow.BeginEdit(); setter(parsed); return null;
+        }, InspectorEditorKind.Checkbox,
             metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
 
     private InspectorFieldViewModel Dropdown(string name, Func<int> getter, Action<int> setter, IReadOnlyList<InspectorFieldOption> options)
         => new(name, getter().ToString(CultureInfo.InvariantCulture), true, IsReadOnly(name), value =>
-        { if (!int.TryParse(value, out var parsed)) return "Choose a value."; _beforeEdit?.Invoke(); setter(parsed); return null; }, InspectorEditorKind.Dropdown, options,
+        {
+            if (!int.TryParse(value, out var parsed)) return "Choose a value.";
+            if (ValidateCurrent(name, parsed) is { } error) return error;
+            _workflow.BeginEdit(); setter(parsed); return null;
+        }, InspectorEditorKind.Dropdown, options,
             GalaxyMapPropertyCatalog.Get(_currentTable, name));
 
     private InspectorFieldViewModel NullableDropdown(string name, Func<int?> getter, Action<int?> setter, IReadOnlyList<InspectorFieldOption> options)
         => new(name, getter()?.ToString(CultureInfo.InvariantCulture) ?? "", true, IsReadOnly(name), value =>
-        { if (value.Length == 0) { _beforeEdit?.Invoke(); setter(null); return null; } if (!int.TryParse(value, out var parsed)) return "Choose a value."; _beforeEdit?.Invoke(); setter(parsed); return null; }, InspectorEditorKind.Dropdown, options,
+        {
+            if (value.Length == 0)
+            {
+                if (ValidateCurrent(name, null) is { } nullError) return nullError;
+                _workflow.BeginEdit(); setter(null); return null;
+            }
+            if (!int.TryParse(value, out var parsed)) return "Choose a value.";
+            if (ValidateCurrent(name, parsed) is { } error) return error;
+            _workflow.BeginEdit(); setter(parsed); return null;
+        }, InspectorEditorKind.Dropdown, options,
             GalaxyMapPropertyCatalog.Get(_currentTable, name));
 
     private InspectorFieldViewModel Color(string name, Func<long> getter, Action<long> setter)
         => new(name, getter().ToString(CultureInfo.InvariantCulture), true, IsReadOnly(name), value =>
-        { if (!long.TryParse(value, out var parsed)) return "Enter a packed 32-bit colour."; _beforeEdit?.Invoke(); setter(parsed); return null; }, InspectorEditorKind.Color,
+        {
+            if (!long.TryParse(value, out var parsed)) return "Enter a packed 32-bit colour.";
+            if (ValidateCurrent(name, parsed) is { } error) return error;
+            _workflow.BeginEdit(); setter(parsed); return null;
+        }, InspectorEditorKind.Color,
             metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
+
+    private string? ValidateCurrent(string propertyName, object? value)
+        => _currentRow is null ? null : Validate(_currentRow, propertyName, value);
+
+    private string? Validate(GalaxyMapRow row, string propertyName, object? value)
+    {
+        if (propertyName is nameof(Cluster.X) or nameof(Cluster.Y) && value is double coordinate &&
+            coordinate is < 0 or > 1)
+        {
+            return "Enter a value from 0 to 1.";
+        }
+        if (row is Planet && propertyName == nameof(Planet.PlanetLevelType) && value is null)
+        {
+            return "PlanetLevelType is required; choose a value from 0 to 7.";
+        }
+        if (row is Planet && propertyName == nameof(Planet.RingColor) && value is long color &&
+            color is < int.MinValue or > uint.MaxValue)
+        {
+            return "RingColor must fit a signed or unsigned packed 32-bit colour value.";
+        }
+
+        return _workflow.ValidateEdit(row, propertyName, value);
+    }
 
     private static InspectorEditorKind ExtraEditor(string name)
         => name.EndsWith("Conditional", StringComparison.OrdinalIgnoreCase) ||

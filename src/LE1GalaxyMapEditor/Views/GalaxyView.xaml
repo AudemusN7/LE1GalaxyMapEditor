@@ -35,6 +35,7 @@
                     <Setter Property="controls:NormalizedCanvas.X" Value="{Binding Item.X}" />
                     <Setter Property="controls:NormalizedCanvas.Y" Value="{Binding Item.Y}" />
                     <Setter Property="controls:NormalizedCanvas.AnchorY" Value="21" />
+                    <Setter Property="controls:NormalizedCanvas.AnchorFromBottom" Value="{Binding IsNearBottomEdge}" />
                 </Style>
             </ItemsControl.ItemContainerStyle>
             <ItemsControl.ItemTemplate>
@@ -57,8 +58,12 @@
                                 <ContentPresenter />
                             </ControlTemplate>
                         </Button.Template>
-                        <StackPanel Width="150">
-                            <Grid Width="42" Height="42" HorizontalAlignment="Center">
+                        <Grid Width="150">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid x:Name="MarkerVisual" Grid.Row="0" Width="42" Height="42" HorizontalAlignment="Center">
                                 <Ellipse x:Name="Glow"
                                          Fill="{Binding ModuleColor, Converter={StaticResource ModuleColorBrushConverter}}"
                                          Opacity="0.20"
@@ -75,10 +80,10 @@
                                          Width="5"
                                          Height="5" />
                             </Grid>
-                            <Border x:Name="LabelBorder" Background="#BD0A1018" CornerRadius="2" Padding="5,2" HorizontalAlignment="Center">
+                            <Border x:Name="LabelBorder" Grid.Row="1" Background="#BD0A1018" CornerRadius="2" Padding="5,2" HorizontalAlignment="Center">
                                 <TextBlock Text="{Binding DisplayName}" FontSize="11" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap" />
                             </Border>
-                        </StackPanel>
+                        </Grid>
                         <Button.Style>
                             <Style TargetType="Button">
                                 <Style.Triggers>
@@ -90,6 +95,10 @@
                         </Button.Style>
                     </Button>
                     <DataTemplate.Triggers>
+                        <DataTrigger Binding="{Binding IsNearBottomEdge}" Value="True">
+                            <Setter TargetName="MarkerVisual" Property="Grid.Row" Value="1" />
+                            <Setter TargetName="LabelBorder" Property="Grid.Row" Value="0" />
+                        </DataTrigger>
                         <DataTrigger Binding="{Binding IsSelected}" Value="True">
                             <Setter TargetName="MarkerRing" Property="Stroke" Value="#F2A33A" />
                             <Setter TargetName="MarkerRing" Property="Fill" Value="#24F2A33A" />

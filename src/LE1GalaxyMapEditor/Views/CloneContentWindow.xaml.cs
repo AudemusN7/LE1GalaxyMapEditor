@@ -2,10 +2,9 @@ using System.Globalization;
 using System.Windows;
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Infrastructure;
+using LE1GalaxyMapEditor.Workflows.Ports;
 
 namespace LE1GalaxyMapEditor.Views;
-
-public sealed record CloneContentRequest(int RowId, string Label, int Name, string NameText, bool CloneChildren);
 
 public partial class CloneContentWindow : Window
 {

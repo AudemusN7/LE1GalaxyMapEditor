@@ -139,12 +139,14 @@ public sealed class Planet : GalaxyMapRow
         {
             if (IsAsteroidBelt) return PlanetVisualKind.AsteroidBelt;
 
-            var text = $"{Label} {NameText}";
-            if (text.Contains("relay", StringComparison.OrdinalIgnoreCase)) return PlanetVisualKind.Relay;
-            if (text.Contains("depot", StringComparison.OrdinalIgnoreCase)) return PlanetVisualKind.FuelDepot;
-            if (text.Contains("sun", StringComparison.OrdinalIgnoreCase) ||
-                text.Contains("star", StringComparison.OrdinalIgnoreCase)) return PlanetVisualKind.Sun;
-            if (text.Contains("anomaly", StringComparison.OrdinalIgnoreCase)) return PlanetVisualKind.Anomaly;
+            bool Contains(string value) =>
+                Label.Contains(value, StringComparison.OrdinalIgnoreCase) ||
+                NameText.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+            if (Contains("relay")) return PlanetVisualKind.Relay;
+            if (Contains("depot")) return PlanetVisualKind.FuelDepot;
+            if (Contains("sun") || Contains("star")) return PlanetVisualKind.Sun;
+            if (Contains("anomaly")) return PlanetVisualKind.Anomaly;
 
             return SystemLevelType switch
             {
@@ -158,7 +160,4 @@ public sealed class Planet : GalaxyMapRow
             };
         }
     }
-
-    private static string FirstUseful(params string[] values)
-        => values.First(value => !string.IsNullOrWhiteSpace(value));
 }

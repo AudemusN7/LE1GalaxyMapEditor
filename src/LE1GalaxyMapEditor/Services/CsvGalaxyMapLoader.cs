@@ -38,7 +38,13 @@ public sealed class CsvGalaxyMapLoader
         }
 
         var fullFolderPath = Path.GetFullPath(folderPath);
-        var files = TableNames.ToDictionary(name => name, name => FindTableFile(fullFolderPath, name));
+        var csvFiles = Directory.EnumerateFiles(
+            fullFolderPath,
+            "*.csv",
+            System.IO.SearchOption.TopDirectoryOnly).ToArray();
+        var files = TableNames.ToDictionary(
+            name => name,
+            name => FindTableFile(fullFolderPath, name, csvFiles));
         var sources = files.ToDictionary(pair => pair.Key, pair => CsvTableSource.FromFile(pair.Value));
         return LoadSources(sources, fullFolderPath, GalaxyMapModule.BaseGame);
     }
@@ -200,9 +206,11 @@ public sealed class CsvGalaxyMapLoader
             });
     }
 
-    private static string FindTableFile(string folderPath, string tableName)
+    private static string FindTableFile(
+        string folderPath,
+        string tableName,
+        IReadOnlyList<string> files)
     {
-        var files = Directory.EnumerateFiles(folderPath, "*.csv", System.IO.SearchOption.TopDirectoryOnly).ToArray();
         var preferredNames = new[] { $"GalaxyMap_{tableName}", tableName };
 
         foreach (var preferredName in preferredNames)
@@ -501,12 +509,7 @@ public sealed class CsvGalaxyMapLoader
 
             if (requireCanonicalHeaders)
             {
-                var canonicalHeaders = GetCanonicalSchema(table).Headers;
-                if (!rawHeaders.SequenceEqual(canonicalHeaders, StringComparer.OrdinalIgnoreCase))
-                {
-                    throw new GalaxyMapLoadException(
-                        $"{source.DisplayName} does not use the canonical {table} columns and order.");
-                }
+                ValidateCanonicalHeaders(source.DisplayName, table, rawHeaders);
             }
 
             var headers = rawHeaders.ToArray();
@@ -574,6 +577,36 @@ public sealed class CsvGalaxyMapLoader
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             throw new GalaxyMapLoadException($"Could not read {source.DisplayName}: {exception.Message}", exception);
+        }
+    }
+
+    private static void ValidateCanonicalHeaders(
+        string sourceName,
+        GalaxyMapTable table,
+        IReadOnlyList<string> actualHeaders)
+    {
+        var expectedHeaders = GetCanonicalSchema(table).Headers;
+        if (actualHeaders.Count != expectedHeaders.Count)
+        {
+            throw new GalaxyMapLoadException(
+                $"{sourceName} has {actualHeaders.Count} {table} columns; " +
+                $"Legendary Explorer requires exactly {expectedHeaders.Count} canonical columns.");
+        }
+
+        for (var index = 0; index < expectedHeaders.Count; index++)
+        {
+            if (string.Equals(actualHeaders[index], expectedHeaders[index], StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var expected = index == 0 ? "an unnamed Row ID column" : $"'{expectedHeaders[index]}'";
+            var actual = string.IsNullOrEmpty(actualHeaders[index])
+                ? "an unnamed column"
+                : $"'{actualHeaders[index]}'";
+            throw new GalaxyMapLoadException(
+                $"{sourceName} has {actual} at {table} column {index + 1}; expected {expected}. " +
+                "Column names and order must match the canonical 2DA schema (letter casing is ignored).");
         }
     }
 

@@ -20,5 +20,8 @@
     <None Include="..\..\src\LE1GalaxyMapEditor\resources\textures\*.png"
           Link="resources\textures\%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\LE1GalaxyMapEditor\resources\planet-designer\**\*"
+          Link="resources\planet-designer\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

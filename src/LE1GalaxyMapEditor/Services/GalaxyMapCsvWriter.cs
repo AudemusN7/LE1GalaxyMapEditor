@@ -55,34 +55,17 @@ public sealed class GalaxyMapCsvWriter
     }
 
     /// <summary>Writes each requested table once. Every individual file replacement is atomic.</summary>
-    public void WriteTables(GalaxyMapLayer layer, IEnumerable<GalaxyMapTable> tables)
+    public void WriteTables(
+        GalaxyMapLayer layer,
+        IEnumerable<GalaxyMapTable> tables,
+        Action<GalaxyMapTable>? tableWritten = null)
     {
         ArgumentNullException.ThrowIfNull(tables);
         foreach (var table in tables.Distinct().OrderBy(DependencySafeWriteOrder))
         {
             WriteTable(layer, table);
+            tableWritten?.Invoke(table);
         }
-    }
-
-    public void Upsert(GalaxyMapLayer layer, GalaxyMapRow row)
-    {
-        ArgumentNullException.ThrowIfNull(row);
-        RequireWritableModuleFolder(layer);
-        layer.Upsert(row);
-        WriteTable(layer, row.Table);
-    }
-
-    public bool Remove(GalaxyMapLayer layer, GalaxyMapRowKey key)
-    {
-        RequireWritableModuleFolder(layer);
-        var row = layer.Find(key);
-        if (row is null || !layer.Remove(row))
-        {
-            return false;
-        }
-
-        WriteTable(layer, key.Table);
-        return true;
     }
 
     private static string[] SerializeRow(GalaxyMapRow row, CsvTableSchema schema)
@@ -115,101 +98,11 @@ public sealed class GalaxyMapCsvWriter
                             !row.CsvSnapshot.IsDirty(header) &&
                             original is not null
                 ? original
-                : CurrentValue(row, header);
+                : GalaxyMapRowValueAccessor.GetCsvToken(row, header);
         }
 
         return values;
     }
-
-    private static string CurrentValue(GalaxyMapRow row, string header)
-    {
-        var known = row switch
-        {
-            Cluster cluster => ClusterValue(cluster, header),
-            GalaxySystem system => SystemValue(system, header),
-            Planet planet => PlanetValue(planet, header),
-            PlotPlanetEntry plotPlanet => PlotPlanetValue(plotPlanet, header),
-            MapEntry map => MapValue(map, header),
-            RelayConnection relay => RelayValue(relay, header),
-            _ => null
-        };
-
-        if (known is not null)
-        {
-            return known;
-        }
-
-        return row.ExtraFields.GetValueOrDefault(header) ?? string.Empty;
-    }
-
-    private static string? ClusterValue(Cluster row, string header) => header.ToUpperInvariant() switch
-    {
-        "LABEL" => row.Label,
-        "X" => Number(row.X),
-        "Y" => Number(row.Y),
-        "NAME" => Integer(row.Name),
-        "NAMETEXT" => row.NameText,
-        "SPHERESIZE" => Number(row.SphereSize),
-        "BACKGROUND" => row.Background,
-        _ => null
-    };
-
-    private static string? SystemValue(GalaxySystem row, string header) => header.ToUpperInvariant() switch
-    {
-        "LABEL" => row.Label,
-        "CLUSTER" => Integer(row.ClusterRowId),
-        "X" => Number(row.X),
-        "Y" => Number(row.Y),
-        "NAME" => Integer(row.Name),
-        "NAMETEXT" => row.NameText,
-        "SCALE" => Number(row.Scale),
-        "SHOWNEBULA" => Integer(row.ShowNebula),
-        _ => null
-    };
-
-    private static string? PlanetValue(Planet row, string header) => header.ToUpperInvariant() switch
-    {
-        "LABEL" => row.Label,
-        "SYSTEM" => Integer(row.SystemRowId),
-        "X" => Number(row.X),
-        "Y" => Number(row.Y),
-        "NAME" => Integer(row.Name),
-        "NAMETEXT" => row.NameText,
-        "ACTIVEWORLD" => Integer(row.ActiveWorld),
-        "DESCRIPTION" => NullableInteger(row.Description),
-        "BUTTONLABEL" => NullableInteger(row.ButtonLabel),
-        "MAP" => Integer(row.MapRowId),
-        "SCALE" => Number(row.Scale),
-        "RINGCOLOR" => row.RingColor.ToString(CultureInfo.InvariantCulture),
-        "ORBITRING" => Integer(row.OrbitRing),
-        "SYSTEMLEVELTYPE" => Integer(row.SystemLevelType),
-        "PLANETLEVELTYPE" => NullableInteger(row.PlanetLevelType),
-        "EVENT" => row.Event,
-        "IMAGEINDEX" => NullableInteger(row.ImageIndex),
-        _ => null
-    };
-
-    private static string? PlotPlanetValue(PlotPlanetEntry row, string header) => header.ToUpperInvariant() switch
-    {
-        "CODE" => Integer(row.Code),
-        "NAME" => Integer(row.Name),
-        "NAMETEXT" => row.NameText,
-        _ => null
-    };
-
-    private static string? MapValue(MapEntry row, string header) => header.ToUpperInvariant() switch
-    {
-        "MAP" => row.MapName,
-        "STARTPOINT" => row.StartPoint,
-        _ => null
-    };
-
-    private static string? RelayValue(RelayConnection row, string header) => header.ToUpperInvariant() switch
-    {
-        "STARTCLUSTER" => Integer(row.StartClusterEncoded),
-        "ENDCLUSTER" => Integer(row.EndClusterEncoded),
-        _ => null
-    };
 
     private static string RequireWritableModuleFolder(GalaxyMapLayer layer)
     {
@@ -256,7 +149,4 @@ public sealed class GalaxyMapCsvWriter
             : value;
     }
 
-    private static string Integer(int value) => value.ToString(CultureInfo.InvariantCulture);
-    private static string NullableInteger(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-    private static string Number(double value) => value.ToString("R", CultureInfo.InvariantCulture);
 }

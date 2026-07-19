@@ -15,15 +15,19 @@ public partial class ColorPickerWindow : Window
         SetColor(UnpackArgb(packed));
     }
     public string? Result { get; private set; }
+    public event Action<string>? PreviewColorChanged;
     public static uint PackArgb(byte a, byte r, byte g, byte b) => ((uint)a << 24) | ((uint)r << 16) | ((uint)g << 8) | b;
     public static Color UnpackArgb(uint value) => Color.FromArgb((byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value);
     public static string SignedDecimal(uint value) => unchecked((int)value).ToString(CultureInfo.InvariantCulture);
     private void Wheel_OnColorChanged(object? sender, EventArgs e) => SetColor(Wheel.SelectedColor);
     private void SetColor(Color color)
     {
-        Wheel.SelectedColor = color; Preview.Background = new SolidColorBrush(color); HexBox.Text = $"#{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
+        Wheel.SelectedColor = color;
+        Preview.Background = new SolidColorBrush(Color.FromRgb(color.R, color.G, color.B));
+        HexBox.Text = $"#{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
         ABox.Text = color.A.ToString(); RBox.Text = color.R.ToString(); GBox.Text = color.G.ToString(); BBox.Text = color.B.ToString();
         var packed = PackArgb(color.A, color.R, color.G, color.B); PackedText.Text = $"Packed value: {SignedDecimal(packed)}  (unsigned {packed})"; ErrorText.Text = "";
+        PreviewColorChanged?.Invoke(SignedDecimal(packed));
     }
     private void ApplyFields_OnClick(object sender, RoutedEventArgs e)
     {

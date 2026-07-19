@@ -4,22 +4,9 @@ using System.Windows.Controls;
 using LE1GalaxyMapEditor.Infrastructure;
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Services;
+using LE1GalaxyMapEditor.Workflows.Ports;
 
 namespace LE1GalaxyMapEditor.Views;
-
-public sealed record LandableDestinationRequest(
-    string MapName,
-    string StartPoint,
-    string Event,
-    int? ButtonLabel,
-    bool AddPlotPlanet);
-
-public sealed record PlanetCreationRequest(
-    PlanetCreationTemplate Template,
-    string NameText,
-    int Name,
-    double Scale,
-    LandableDestinationRequest? Destination);
 
 public sealed record PlanetTemplateOption(PlanetCreationTemplate Value, string Label, string Detail)
 {

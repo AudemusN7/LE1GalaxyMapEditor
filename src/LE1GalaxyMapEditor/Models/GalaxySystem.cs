@@ -63,7 +63,4 @@ public sealed class GalaxySystem : GalaxyMapRow
     public ObservableCollection<Planet> Planets { get; } = [];
 
     public string DisplayName => FirstUseful(NameText, Label, Name.ToString(), $"System {RowId}");
-
-    private static string FirstUseful(params string[] values)
-        => values.First(value => !string.IsNullOrWhiteSpace(value));
 }
