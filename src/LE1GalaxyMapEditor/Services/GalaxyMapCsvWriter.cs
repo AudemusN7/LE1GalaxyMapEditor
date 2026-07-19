@@ -98,22 +98,10 @@ public sealed class GalaxyMapCsvWriter
                             !row.CsvSnapshot.IsDirty(header) &&
                             original is not null
                 ? original
-                : CurrentValue(row, header);
+                : GalaxyMapRowValueAccessor.GetCsvToken(row, header);
         }
 
         return values;
-    }
-
-    private static string CurrentValue(GalaxyMapRow row, string header)
-    {
-        var value = GalaxyMapRowValueAccessor.GetValue(row, header);
-        return value switch
-        {
-            null => string.Empty,
-            double number => GalaxyMapNumber.Serialize(number),
-            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? string.Empty,
-            _ => value.ToString() ?? string.Empty
-        };
     }
 
     private static string RequireWritableModuleFolder(GalaxyMapLayer layer)

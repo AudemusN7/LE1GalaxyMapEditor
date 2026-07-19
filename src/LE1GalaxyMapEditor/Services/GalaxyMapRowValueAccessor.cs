@@ -10,6 +10,18 @@ namespace LE1GalaxyMapEditor.Services;
 /// </summary>
 public static class GalaxyMapRowValueAccessor
 {
+    public static string GetCsvToken(GalaxyMapRow row, string column)
+    {
+        var value = GetValue(row, column);
+        return value switch
+        {
+            null => string.Empty,
+            double number => GalaxyMapNumber.Serialize(number),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture) ?? string.Empty,
+            _ => value?.ToString() ?? string.Empty
+        };
+    }
+
     public static object? GetValue(GalaxyMapRow row, string column)
     {
         if (IsRowId(column))

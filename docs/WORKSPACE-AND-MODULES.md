@@ -90,11 +90,13 @@ The Galaxy Map Editor, 2DA Table Editor and Planet Designer share edit memory.
 | **Undo** | Reverses the most recent staged change, regardless of which editor made it. |
 | **Redo** | Restores the most recently undone change. |
 | **Discard** | Reloads the committed workspace and removes every uncommitted change. |
-| **Commit (?)** | Writes all uncommitted changes across all writable modules. |
+| **Commit (?)** | Reviews, then writes all uncommitted changes across all writable modules. |
 | **Refresh** | Reloads BASEGAME and remembered modules; asks before discarding pending work. |
 
 Commit's number counts groups of changed data, not rows or individual field edits.
 Example: If you move the position of an object on the map, it will appear as `Commit [2]` as the X and Y column data was edited.
+
+Choosing **Commit** opens a fixed-size review window before anything is written. It lists changed CSV fields with their committed and staged values, identifies new or deleted rows, and includes module metadata and staged resource files. New rows are kept compact, showing their internal name and tree relationship rather than every added field. Long lists scroll within the window. Choose **Commit changes** to continue or **Cancel** to leave every change staged.
 
 [IMAGE: Undo, Redo, Discard and Commit controls with uncommitted changes present]
 

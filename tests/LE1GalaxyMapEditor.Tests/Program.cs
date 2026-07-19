@@ -59,6 +59,7 @@ internal static class Program
         Run("Partial layers override deterministically", PartialLayersOverrideDeterministically);
         Run("Atomic partial CSV writer contract", AtomicPartialCsvWriterContract);
         Run("MainViewModel writes full-row overrides", MainViewModelWritesFullRowOverrides);
+        Run("Commit preview describes and protects staged writes", CommitPreviewDescribesAndProtectsStagedWrites);
         Run("Scalar edits preserve hierarchy identity", ScalarEditsPreserveHierarchyIdentity);
         Run("Reserved-range row creation", ReservedRangeRowCreation);
         Run("Partial module reservations", PartialModuleReservations);
@@ -1753,6 +1754,75 @@ internal static class Program
         });
     }
 
+    private static void CommitPreviewDescribesAndProtectsStagedWrites()
+    {
+        WithTemporaryDirectory(parent =>
+        {
+            CommitPreview? reviewed = null;
+            var allowCommit = false;
+            var viewModel = new MainViewModel(
+                new CsvGalaxyMapLoader(),
+                new GalaxyMapTextureService(FindTextureDirectory()),
+                new GalaxyMapWorkspaceStore(Path.Combine(parent, "workspace.json")),
+                (_, modules) => modules.Single(),
+                confirmAction: _ => true,
+                commitReviewAction: preview =>
+                {
+                    reviewed = preview;
+                    return allowCommit;
+                });
+            True(viewModel.LoadBuiltIn(), "BASEGAME loads");
+            True(viewModel.CreateModule(parent, "Preview Test", "PREVIEW_TEST", ModuleColor.Cyan,
+                TestReservations()), "authoring module is created");
+
+            var clusterNode = FindNode(viewModel, row => row is Cluster { RowId: 1 });
+            clusterNode.IsSelected = true;
+            var xField = viewModel.Inspector.Sections.Single(section => section.Title == "Cluster")
+                .Fields.Single(field => field.Name == "X");
+            var original = xField.Value;
+            xField.Value = "0.31";
+
+            var directPreview = viewModel.CreateCommitPreview();
+            Equal(1, directPreview.ChangeCount, "one changed field is counted");
+            Equal(1, directPreview.FileCount, "one dirty CSV is counted");
+            var section = directPreview.Sections.Single(section => section.FileName == "GalaxyMap_Cluster_part.csv");
+            var entry = section.Entries.Single(entry => entry.Title == "Cluster #1");
+            True(entry.Details.Single().Contains($"\"{original}\"", StringComparison.Ordinal),
+                "preview includes the original CSV value");
+            True(entry.Details.Single().Contains("\u2192  \"0.31\"", StringComparison.Ordinal),
+                "preview includes the exact staged CSV value");
+
+            var outputPath = Path.Combine(viewModel.ActiveModule!.FolderPath!, "GalaxyMap_Cluster_part.csv");
+            viewModel.CommitCommand.Execute(null);
+            NotNull(reviewed, "Commit command requests review");
+            True(viewModel.HasPendingChanges, "cancelling review leaves changes staged");
+            True(!File.Exists(outputPath), "cancelling review performs no CSV write");
+
+            allowCommit = true;
+            viewModel.CommitCommand.Execute(null);
+            True(!viewModel.HasPendingChanges, "confirming review commits the staged changes");
+            True(File.Exists(outputPath), "confirming review writes the CSV");
+
+            var committedOverride = FindNode(viewModel, row => row is Cluster { RowId: 1 });
+            committedOverride.DeleteCommand!.Execute(null);
+            var deletionPreview = viewModel.CreateCommitPreview();
+            var deleted = deletionPreview.Sections
+                .Single(section => section.FileName == "GalaxyMap_Cluster_part.csv")
+                .Entries.Single(entry => entry.Title == "Cluster #1");
+            Equal("DELETE", deleted.Badge, "removed module rows are explicit in the preview");
+            True(deleted.Details.Single().Contains("removed", StringComparison.OrdinalIgnoreCase),
+                "deleted row explains its pending CSV effect");
+
+            viewModel.AddClusterCommand.Execute(null);
+            var newRow = viewModel.CreateCommitPreview().Sections
+                .Single(section => section.FileName == "GalaxyMap_Cluster_part.csv")
+                .Entries.Single(entry => entry.Badge == "NEW");
+            Equal(0, newRow.Details.Count, "new rows do not expand into every added property");
+            True(newRow.Title.Split(" / ").Length >= 2,
+                "new rows retain an identifying internal name in their compact title");
+        });
+    }
+
     private static void ScalarEditsPreserveHierarchyIdentity()
     {
         WithTemporaryDirectory(parent =>
@@ -2952,6 +3022,23 @@ internal static class Program
             Equal(((SolidColorBrush)application.FindResource("AppBackgroundBrush")).Color,
                 ((SolidColorBrush)confirmationWindow.Background).Color,
                 "confirmation dialogs use the application dark background");
+            var commitPreviewWindow = new CommitPreviewWindow(new CommitPreview(
+                "Across 1 file, 2 staged changes.",
+                2,
+                1,
+                [new CommitPreviewSection(
+                    "Test Module [TEST_MODULE]",
+                    "GalaxyMap_Planet_part.csv",
+                    [new CommitPreviewEntry(
+                        "Planet #123",
+                        ["NameText: \"Old\"  →  \"New\""],
+                        "NEW")])]));
+            Compose(commitPreviewWindow, application.Dispatcher);
+            Equal(520d, commitPreviewWindow.Height,
+                "commit preview uses a fixed height instead of growing with its changes");
+            Equal(ScrollBarVisibility.Auto,
+                ((ScrollViewer)commitPreviewWindow.FindName("ChangeScrollViewer")).VerticalScrollBarVisibility,
+                "commit preview scrolls when its change list exceeds the fixed window");
             var shaderNameWindow = new PlanetShaderNameWindow(new PlanetShaderNameRequest(
                 "Test Planet",
                 123,

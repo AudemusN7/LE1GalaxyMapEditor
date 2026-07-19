@@ -45,7 +45,7 @@ Select the folder that contains your exported CSV files and open it. It will (if
 2. Change a value in **PROPERTIES**.
 3. If the row comes from BASEGAME or another read-only source, choose the writable module that should receive the override.
 4. Review the uncommitted-change indicator on the module bar.
-5. Choose **Commit** to write the module files.
+5. Choose **Commit**, review the staged changes, then choose **Commit changes** to write the module files.
 
 [IMAGE: Selected BASEGAME planet with the Choose edit module window open]
 

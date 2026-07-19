@@ -1,4 +1,5 @@
 using LE1GalaxyMapEditor.Models;
+using LE1GalaxyMapEditor.Workflows.Queries;
 
 namespace LE1GalaxyMapEditor.Workflows.Ports;
 
@@ -85,5 +86,6 @@ public interface IEditorDialogs
     MoveDestinationOption? ChooseMoveDestination(
         GalaxyMapRow source,
         IReadOnlyList<MoveDestinationOption> options);
+    bool ReviewCommit(CommitPreview preview);
     bool Confirm(string message);
 }

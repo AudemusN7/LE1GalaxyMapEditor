@@ -3,6 +3,7 @@ using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Services;
 using LE1GalaxyMapEditor.Views;
 using LE1GalaxyMapEditor.Workflows.Ports;
+using LE1GalaxyMapEditor.Workflows.Queries;
 using Microsoft.Win32;
 
 namespace LE1GalaxyMapEditor.Presentation;
@@ -10,7 +11,8 @@ namespace LE1GalaxyMapEditor.Presentation;
 public sealed class WpfEditorDialogs(
     Func<GalaxyMapRow, IReadOnlyList<GalaxyMapModule>, GalaxyMapModule?>? editTargetSelector = null,
     Func<string, bool>? confirmAction = null,
-    Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null) : IEditorDialogs
+    Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null,
+    Func<CommitPreview, bool>? commitReviewAction = null) : IEditorDialogs
 {
     public ModuleSetupResult? ConfigureModule(ModuleSetupDialogRequest request)
     {
@@ -167,6 +169,23 @@ public sealed class WpfEditorDialogs(
             Owner = owner
         };
         return dialog.ShowDialog() == true && dialog.Choice == ConfirmationChoice.Primary;
+    }
+
+    public bool ReviewCommit(CommitPreview preview)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        if (commitReviewAction is not null)
+        {
+            return commitReviewAction(preview);
+        }
+
+        if (Application.Current?.MainWindow is not { } owner)
+        {
+            return false;
+        }
+
+        var dialog = new CommitPreviewWindow(preview) { Owner = owner };
+        return dialog.ShowDialog() == true;
     }
 
     private static Window? ActiveOwner()

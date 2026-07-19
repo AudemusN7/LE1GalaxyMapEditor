@@ -37,6 +37,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly RowAuthoringWorkflow _rowAuthoring;
     private readonly PlanetDesignerWorkflow _planetDesigner;
     private readonly HierarchyNavigationCoordinator _navigation;
+    private readonly CommitPreviewBuilder _commitPreviewBuilder;
 
     private GalaxyMapWorkspace? _workspace;
     private GalaxyMapDocument? _document;
@@ -60,12 +61,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Func<string, bool>? confirmAction = null,
         IEditorDialogs? dialogs = null,
         IDeferredScheduler? deferredScheduler = null,
-        Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null)
+        Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null,
+        Func<CommitPreview, bool>? commitReviewAction = null)
     {
         _loader = loader;
         _textures = textures ?? new GalaxyMapTextureService();
         _workspaceStore = workspaceStore ?? new GalaxyMapWorkspaceStore();
-        _dialogs = dialogs ?? new WpfEditorDialogs(editTargetSelector, confirmAction, shaderNameSelector);
+        _dialogs = dialogs ?? new WpfEditorDialogs(
+            editTargetSelector, confirmAction, shaderNameSelector, commitReviewAction);
+        _commitPreviewBuilder = new CommitPreviewBuilder(_manifestStore);
         _validation = new ValidationCoordinator(deferredScheduler ?? new DispatcherDeferredScheduler());
         _validation.Completed += ValidationOnCompleted;
         _edits = new EditSessionService(_session, manifestStore: _manifestStore);
@@ -140,7 +144,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ToggleTableViewCommand = new RelayCommand(ToggleTableView, () => HasDocument);
         ToggleDiagnosticsCommand = new RelayCommand(ToggleDiagnostics);
         NavigateDiagnosticCommand = new RelayCommand<ValidationDiagnostic>(NavigateToDiagnostic);
-        CommitCommand = new RelayCommand(() => CommitPendingChanges(), () => HasPendingChanges);
+        CommitCommand = new RelayCommand(ReviewAndCommitPendingChanges, () => HasPendingChanges);
         UndoCommand = new RelayCommand(Undo, () => _edits.CanUndo);
         RedoCommand = new RelayCommand(Redo, () => _edits.CanRedo);
         DiscardChangesCommand = new RelayCommand(ConfirmDiscardChanges, () => HasPendingChanges);
@@ -1160,6 +1164,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ErrorMessage = string.Empty;
         NotifyPendingChanges();
         return true;
+    }
+
+    public CommitPreview CreateCommitPreview() => _commitPreviewBuilder.Build(_session);
+
+    private void ReviewAndCommitPendingChanges()
+    {
+        var preview = CreateCommitPreview();
+        if (preview.ChangeCount > 0 && _dialogs.ReviewCommit(preview))
+        {
+            CommitPendingChanges();
+        }
     }
 
     public void DiscardPendingChanges()
