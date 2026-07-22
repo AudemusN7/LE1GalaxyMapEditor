@@ -306,7 +306,10 @@ public sealed class WorkspaceWorkflowService
         {
             ValidateNewModuleRanges(reservations);
             var packagePath = Path.GetFullPath(destinationPackagePath);
-            _templatePackages.Create(packagePath);
+            var includedTables = Enum.GetValues<GalaxyMapTable>()
+                .Where(table => reservations.GetRange(table) is not null)
+                .ToArray();
+            _templatePackages.Create(packagePath, includedTables);
             createdPackage = true;
             var discovered = _moduleDiscovery.Discover(packagePath);
             EnsureUniqueTag(discovered.Module.Tag);
@@ -323,7 +326,7 @@ public sealed class WorkspaceWorkflowService
                 tlkLocale: tlkLocale,
                 resourcePackagePaths: ValidateResourcePackages(module, resourcePackagePaths ?? []));
             var profile = GalaxyMapModuleProfile.FromModule(module);
-            var layer = _pccLoader.Load(packagePath, module);
+            var layer = _pccLoader.Load(packagePath, module, allowEmpty: true);
             _profileStore.Save(profile);
             workspace.Mount(layer);
             workspace.SetActiveModule(module);
@@ -358,7 +361,10 @@ public sealed class WorkspaceWorkflowService
             {
                 var discovered = _moduleDiscovery.Discover(folderPath);
                 EnsureUniqueTag(discovered.Module.Tag);
-                var pccLayer = _pccLoader.Load(folderPath, discovered.Module);
+                var pccLayer = _pccLoader.Load(
+                    folderPath,
+                    discovered.Module,
+                    allowEmpty: !discovered.IsNewProfile);
                 var profile = discovered.Profile;
                 var pccModule = discovered.Module;
                 var inferred = InferReservations(pccLayer, workspace);
@@ -592,7 +598,7 @@ public sealed class WorkspaceWorkflowService
 
         try
         {
-            ValidateNewModuleRanges(reservations, module);
+            ValidateNewModuleRanges(reservations, module, loadOrder, tag);
             ValidateUpdatedModuleRows(module, reservations);
             if (module.IsPccBacked &&
                 (!string.Equals(module.Tag, tag, StringComparison.OrdinalIgnoreCase) ||
@@ -737,7 +743,7 @@ public sealed class WorkspaceWorkflowService
                     throw new InvalidOperationException(
                         $"A module tagged {discovered.Module.Tag} is already mounted.");
                 }
-                loadedLayers.Add(_pccLoader.Load(packagePath, discovered.Module));
+                loadedLayers.Add(_pccLoader.Load(packagePath, discovered.Module, allowEmpty: true));
             }
             catch (Exception exception) when (IsExpectedOperationFailure(exception))
             {
@@ -930,14 +936,6 @@ public sealed class WorkspaceWorkflowService
     public int NextLoadOrder()
         => _session.Workspace is null ? 1 : _session.Workspace.Layers.Max(layer => layer.Module.LoadOrder) + 1;
 
-    public static ModuleIdReservations DefaultReservations()
-        => new(
-            new RowIdRange(100, 199),
-            new RowIdRange(1_000, 1_999),
-            new RowIdRange(10_000, 19_999),
-            new RowIdRange(1_000, 1_999),
-            new RowIdRange(1_000, 1_999));
-
     private void ClearStartupIssueFor(string tag, string? folderPath)
     {
         _missingRememberedModules.RemoveAll(module =>
@@ -953,14 +951,16 @@ public sealed class WorkspaceWorkflowService
 
     private void ValidateNewModuleRanges(
         ModuleIdReservations reservations,
-        GalaxyMapModule? ignoredModule = null)
+        GalaxyMapModule? ignoredModule = null,
+        int? proposedLoadOrder = null,
+        string? proposedTag = null)
     {
-        if (_session.Workspace is null)
+        if (_session.Workspace is not { } workspace)
         {
             return;
         }
 
-        foreach (var existing in _session.Workspace.Modules)
+        foreach (var existing in workspace.Modules)
         foreach (var table in ReservableTables)
         {
             if (ReferenceEquals(existing, ignoredModule))
@@ -975,7 +975,45 @@ public sealed class WorkspaceWorkflowService
                     $"The proposed {table} range {left} overlaps {existing.Tag}'s reserved range {right}.");
             }
         }
+
+        IEnumerable<GalaxyMapLayer> collisionLayers = ignoredModule is null
+            ? workspace.Layers
+            : workspace.Layers.Where(layer =>
+                !ReferenceEquals(layer.Module, ignoredModule) &&
+                (layer.Module.IsBaseGame ||
+                 layer.Module.LoadOrder < (proposedLoadOrder ?? ignoredModule.LoadOrder) ||
+                 layer.Module.LoadOrder == (proposedLoadOrder ?? ignoredModule.LoadOrder) &&
+                 string.Compare(
+                     layer.Module.Tag,
+                     proposedTag ?? ignoredModule.Tag,
+                     StringComparison.OrdinalIgnoreCase) < 0))
+                .ToArray();
+
+        foreach (var table in ReservableTables)
+        {
+            if (reservations.GetRange(table) is not { } range)
+            {
+                continue;
+            }
+
+            var collision = collisionLayers
+                .SelectMany(layer => ReservationRows(layer, table))
+                .FirstOrDefault(row => range.Contains(row.RowId));
+            if (collision is not null)
+            {
+                throw new InvalidOperationException(
+                    $"The proposed {table} range {range} contains existing row ID {collision.RowId} " +
+                    $"from {collision.Origin?.ModuleTag ?? "a mounted lower layer"}.");
+            }
+        }
     }
+
+    private static IEnumerable<GalaxyMapRow> ReservationRows(
+        GalaxyMapLayer layer,
+        GalaxyMapTable table)
+        => table == GalaxyMapTable.Planet
+            ? layer.Rows(GalaxyMapTable.Planet).Concat(layer.Rows(GalaxyMapTable.PlotPlanet))
+            : layer.Rows(table);
 
     private void ValidateUpdatedModuleRows(
         GalaxyMapModule module,

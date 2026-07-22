@@ -39,6 +39,6 @@ The production bloom and display grade are measured approximations. They do not 
 
 ## Remaining unknowns
 
-- The runtime path that assigns CSV light values was not located, although its observed result is reproduced.
+- The runtime path that assigns 2DA light values was not located, although its observed result is reproduced.
 - `LightEnv_Bounced*` properties do not appear in the recovered direct point-light shader and are not simulated.
 - `Shader` appears to identify a runtime-created material instance; its construction path is unnecessary for previewing the recovered parameters.

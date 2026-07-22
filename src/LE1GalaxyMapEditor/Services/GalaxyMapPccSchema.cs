@@ -70,7 +70,8 @@ public static class GalaxyMapPccSchema
             var type = property.Editor switch
             {
                 PlanetAppearanceEditorKind.Shader or PlanetAppearanceEditorKind.Texture => GalaxyMapCellType.Name,
-                _ => GalaxyMapCellType.Int
+                PlanetAppearanceEditorKind.PackedColor => GalaxyMapCellType.Int,
+                _ => GalaxyMapCellType.Float
             };
             Add(result, type, property.Columns);
         }

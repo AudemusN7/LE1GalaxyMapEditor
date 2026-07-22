@@ -109,7 +109,7 @@ Right-click a System and choose **Move to Cluster…**, or right-click a planet/
 
 The Row ID and map coordinates stay the same. The editor updates managed parent relationships and resolves numbered-label collisions in the destination.
 
-Moving inherited content creates an override rather than changing its read-only source.
+Moving BASEGAME content creates an override rather than changing the built-in source.
 
 ## Delete content
 
@@ -121,7 +121,7 @@ Right-click and choose:
 
 The editor asks for confirmation. Deleting a module-owned Cluster or System also removes its module-owned descendants and managed links.
 
-BASEGAME and read-only source rows cannot be deleted. Deleting an override reveals the lower-priority version.
+BASEGAME rows cannot be deleted. Deleting an override reveals the lower-priority version.
 
 ## Relay connections
 

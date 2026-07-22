@@ -68,8 +68,8 @@ internal static class OptimizationRegressionTests
         var diagnostics = new GalaxyMapValidator().Validate(workspace);
         Equal(1, diagnostics.Count(item => item.Code == "ID-BASEGAME-OVERRIDE"),
             "first module override is informational");
-        Equal(1, diagnostics.Count(item => item.Code == "ID-MODULE-COLLISION"),
-            "competing module override is diagnosed once");
+        Equal(1, diagnostics.Count(item => item.Code == "ID-MODULE-OVERRIDE"),
+            "higher module override is informational");
         True(diagnostics.All(item => item.Code != "ID-OUTSIDE-RESERVATION" && item.Code != "ID-NO-RESERVATION"),
             "same-ID overrides do not require a new-row reservation");
     }
@@ -108,6 +108,8 @@ internal static class OptimizationRegressionTests
         var diagnostics = new GalaxyMapValidator().Validate(workspace);
         Equal(1, diagnostics.Count(item => item.Code == "MOD-RANGE-OVERLAP"),
             "inclusive one-ID range overlap");
+        Equal(1, diagnostics.Count(item => item.Code == "MOD-RANGE-ROW-OVERLAP" && item.RowId == 101),
+            "reservation cannot claim a row supplied by a lower module");
         Equal(1, diagnostics.Count(item => item.Code == "ID-OUTSIDE-RESERVATION" && item.RowId == 103),
             "new row beyond reservation boundary");
     }

@@ -75,7 +75,46 @@ public sealed partial class GalaxyMapValidator
                 }
             }
         }
+
+        var layers = workspace.Layers.ToArray();
+        for (var layerIndex = 1; layerIndex < layers.Length; layerIndex++)
+        {
+            var layer = layers[layerIndex];
+            foreach (var table in ReservableTables)
+            {
+                if (layer.Module.Reservations.GetRange(table) is not { } range)
+                {
+                    continue;
+                }
+
+                var collisions = layers.Take(layerIndex)
+                    .SelectMany(lower => ReservationRows(lower, table))
+                    .Where(row => range.Contains(row.RowId))
+                    .GroupBy(row => row.RowId)
+                    .Select(group => group.Last())
+                    .ToArray();
+                foreach (var collision in collisions)
+                {
+                    diagnostics.Add(new ValidationDiagnostic(
+                        "MOD-RANGE-ROW-OVERLAP",
+                        ValidationSeverity.Error,
+                        $"{layer.Module.Tag}'s {table} range {range} contains existing row ID " +
+                        $"{collision.RowId} from {collision.Origin?.ModuleTag ?? "a lower layer"}.",
+                        layer.Module.Tag,
+                        table.ToString(),
+                        collision.RowId,
+                        "Row ID"));
+                }
+            }
+        }
     }
+
+    private static IEnumerable<GalaxyMapRow> ReservationRows(
+        GalaxyMapLayer layer,
+        GalaxyMapTable table)
+        => table == GalaxyMapTable.Planet
+            ? layer.Rows(GalaxyMapTable.Planet).Concat(layer.Rows(GalaxyMapTable.PlotPlanet))
+            : layer.Rows(table);
 
     private static void ValidateLayers(
         GalaxyMapWorkspace workspace,
@@ -129,9 +168,8 @@ public sealed partial class GalaxyMapValidator
                         }
                         else
                         {
-                            AddForRow(diagnostics, row, "ID-MODULE-COLLISION", ValidationSeverity.Error,
-                                $"This row also exists in module {lowerModule.Tag}. Module-to-module overrides " +
-                                "require an explicit dependency/override declaration.",
+                            AddForRow(diagnostics, row, "ID-MODULE-OVERRIDE", ValidationSeverity.Info,
+                                $"This row intentionally mounts above {lowerModule.Tag} {table} row {row.RowId}.",
                                 "Row ID", layer.Module.Tag);
                         }
 
@@ -409,7 +447,7 @@ public sealed partial class GalaxyMapValidator
         {
             ValidateCoordinate(system, system.X, "X", diagnostics);
             ValidateCoordinate(system, system.Y, "Y", diagnostics);
-            ValidatePositiveFinite(system, system.Scale, nameof(GalaxySystem.Scale), diagnostics);
+            ValidateNonNegativeFinite(system, system.Scale, nameof(GalaxySystem.Scale), diagnostics);
             if (system.ShowNebula is not 0 and not 1)
             {
                 AddForRow(diagnostics, system, "TYPE-SHOW-NEBULA", ValidationSeverity.Warning,
@@ -466,7 +504,7 @@ public sealed partial class GalaxyMapValidator
         {
             ValidateCoordinate(planet, planet.X, "X", diagnostics);
             ValidateCoordinate(planet, planet.Y, "Y", diagnostics);
-            ValidatePositiveFinite(planet, planet.Scale, nameof(Planet.Scale), diagnostics);
+            ValidateNonNegativeFinite(planet, planet.Scale, nameof(Planet.Scale), diagnostics);
 
             if (!systems.TryGetValue(planet.SystemRowId, out var system))
             {
@@ -900,6 +938,25 @@ public sealed partial class GalaxyMapValidator
         {
             AddForRow(diagnostics, row, "VALUE-NONPOSITIVE-SCALE", ValidationSeverity.Warning,
                 $"{column} is {GalaxyMapNumber.FormatDisplay(value)}; zero or negative sizes are normally invisible.",
+                column);
+        }
+    }
+
+    private static void ValidateNonNegativeFinite(
+        GalaxyMapRow row,
+        double value,
+        string column,
+        ICollection<ValidationDiagnostic> diagnostics)
+    {
+        if (!double.IsFinite(value))
+        {
+            AddForRow(diagnostics, row, "TYPE-NONFINITE", ValidationSeverity.Error,
+                $"{column} must be a finite number.", column);
+        }
+        else if (value < 0)
+        {
+            AddForRow(diagnostics, row, "VALUE-NEGATIVE-SCALE", ValidationSeverity.Warning,
+                $"{column} is {GalaxyMapNumber.FormatDisplay(value)}; negative sizes are normally invisible.",
                 column);
         }
     }

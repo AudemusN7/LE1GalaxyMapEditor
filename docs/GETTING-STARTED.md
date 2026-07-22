@@ -11,41 +11,47 @@ You need the Desktop Runtime, not the larger developer SDK. The runtime is not b
 
 ## First Startup
 
-On first launch, the editor loads its built-in **BASEGAME READ-ONLY** data. On later launches it also restores the module folders remembered in your workspace.
+On first launch, the editor loads its built-in **BASEGAME READ-ONLY** data. On later launches it also restores the DLC module profiles remembered in your workspace.
 
 ![First launch showing BASEGAME READ-ONLY, the module bar and the New Module and Open Module controls](images/first-launch.png)
 
 ## Create an authoring module
 
-Choose **New Module**, then complete the module details:
+Before choosing **New Module**, create the DLC structure with ME3Tweaks Mod Manager. The DLC must contain:
+
+- a valid `AutoLoad.ini` in the DLC root, with `ModName` and a non-negative `ModMount` under `[ME1DLCMOUNT]`;
+- a `CookedPCConsole` folder directly beneath that root.
+- A M3DA script for merging your 2DA tables (does not need to exist when working with this editor however, only when installing the mod).
+
+Choose **New Module** and save the new `.pcc` directly inside `CookedPCConsole`. The editor reads the module tag from the DLC folder name and the display name and mount priority from `AutoLoad.ini`. Then complete the editor-owned settings:
 
 | Field | What to enter |
 |---|---|
-| **Display name** | The readable name shown in the editor. |
-| **Module tag** | A unique short tag using letters, numbers, `_` or `-`.  I recommend using your DLC name `eg. DLC_MOD_GalaxyMap`.|
+| **Display name** | The readable name shown in the editor. This does not alter `AutoLoad.ini`. |
 | **Map colour** | The colour used to identify this module's rows and values. |
-| **Mount priority** | Use the same number as your DLC's mount. |
-| Reserved ranges | Inclusive ID ranges available for new rows. Leave ranges blank for 2DAs you don't need to include. |
+| **TLK locale** | The locale used when displaying string references for this module. |
+| **Resource PCCs** | Optional PCCs from the same DLC whose `Texture2D` exports should be available to previews and texture menus. These remain read-only. |
+| Reserved ranges | Inclusive ID ranges available for new rows. Leave ranges blank for 2DAs you don't need to include. These can be changed later. |
 
-Planet and PlotPlanet share the same reserved range. Reserved ranges must not overlap another mounted module's ranges.
+Planet and PlotPlanet share the same reserved range. Reserved ranges must not overlap another mounted module's ranges or existing BASEGAME/module row IDs.
 
-![New Module window showing Display name, Module tag, Map colour, Mount priority and reserved ID ranges](images/new-module.png)
+![New Module window showing the PCC destination, editor settings, resource PCCs and reserved ID ranges](images/new-module.png)
 
-Creating the module immediately creates its folder and `module.json`. Galaxy-map content is not written until you use **Commit**.
+Creating the module immediately creates a valid, row-empty galaxy-map PCC. Only tables with a reserved range are included. If you add a range later, the editor creates that table export when you first commit authored content for it.
 
-## Alternate: Import an existing module
+## Alternate: Open an existing module
 
-If you already have an existing DLC mod or need to relink a module, choose **Open Module**
+If your DLC already has a galaxy-map PCC, or a remembered profile needs to be relinked after the DLC moved, choose **Open Module**.
 
-Select the folder that contains your exported CSV files and open it. It will (if it does not already exist) import and link your module via the `module.json` file.
+Select the `.pcc` inside its `CookedPCConsole` folder. The editor reads the supported galaxy-map exports directly and creates or reconnects an editor-owned profile. Existing row IDs are used to suggest any reservation ranges that the profile does not already define.
 
 ## Make your first edit
 
 1. Select a Cluster, System, planet or system object in the **HIERARCHY** or map view.
 2. Change a value in **PROPERTIES**.
-3. If the row comes from BASEGAME or another read-only source, choose the writable module that should receive the override.
+3. If the row comes from BASEGAME, choose the writable module that should receive the override.
 4. Review the uncommitted-change indicator on the module bar.
-5. Choose **Commit**, review the staged changes, then choose **Commit changes** to write the module files.
+5. Choose **Commit**, review the staged changes, then choose **Commit changes** to update the galaxy-map PCC.
 
 ![Selected BASEGAME planet with the Choose edit module window open](images/choose-edit-module.png)
 
@@ -63,6 +69,7 @@ General diagnostics do not automatically block **Commit**. Resolve reported prob
 | Item | Location |
 |---|---|
 | Remembered workspace | `%LocalAppData%\LE1GalaxyMapEditor\workspace.json` |
+| Module profiles | `%LocalAppData%\LE1GalaxyMapEditor\modules` |
 | Startup logs | `%LocalAppData%\LE1GalaxyMapEditor\Logs` |
 | Personal Planet templates | `%LocalAppData%\LE1GalaxyMapEditor\PlanetTemplates` |
 

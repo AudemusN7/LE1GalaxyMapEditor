@@ -266,7 +266,7 @@ public sealed class CommitPreviewBuilder(
         {
             if (module.IsPccBacked && module.GalaxyMapPackagePath is not null)
             {
-                return _pccLoader.Load(module.GalaxyMapPackagePath, module);
+                return _pccLoader.Load(module.GalaxyMapPackagePath, module, allowEmpty: true);
             }
             return _loader.LoadPartFolder(module.FolderPath, module);
         }

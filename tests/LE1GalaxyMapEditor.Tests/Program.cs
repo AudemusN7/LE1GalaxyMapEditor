@@ -23,6 +23,7 @@ using LE1GalaxyMapEditor.Workflows;
 using LE1GalaxyMapEditor.Workflows.Editing;
 using LE1GalaxyMapEditor.Workflows.Ports;
 using LE1GalaxyMapEditor.Workflows.Queries;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.Tests;
 
@@ -199,7 +200,7 @@ internal static class Program
         {
             ["GalaxyMap_Cluster.csv"] = "7BB1FEDCF4E3A5D0B7B86BF99427144F44B567821D42B37203EA452BF079C129",
             ["GalaxyMap_Map.csv"] = "CD0405C1CB81D47FEC06B8153377619524FB23C55938D4A41481376877BE185C",
-            ["GalaxyMap_Planet.csv"] = "292BA5BFB9197AAE150F22CF50CCC6CE4357AB8640F0864875A7588C55A58DD8",
+            ["GalaxyMap_Planet.csv"] = "E5D6B975E6123D8A28A9932D172C7ABDC542CEDBDA6D193837CCB8733948D256",
             ["GalaxyMap_PlotPlanet.csv"] = "B24DF58848024E37A72614DF932FF1C9992FCAC7CB79446BC76A2CD32F8A94B8",
             ["GalaxyMap_Relay.csv"] = "5FE5B6B706D7DA1DD250C483962C07559C97D9E5726F406F06BE4DF2471CB373",
             ["GalaxyMap_System.csv"] = "10E988BB1F96D22D7226CA9CBB17FEA5EA03A3D517CCDD64FF4872614C18249A"
@@ -251,6 +252,29 @@ internal static class Program
                 Equal(GalaxyMapCellType.Int, schema.DefaultCellType(CsvRowSnapshot.RowIdColumnName),
                     $"{pair.Key} row ID type");
             }
+
+            var planetSchema = layer.GetSchema(GalaxyMapTable.Planet)!;
+            Equal(GalaxyMapCellType.Float, planetSchema.DefaultCellType("Brightness1"),
+                "appearance scalar is a numeric PCC cell");
+            Equal(GalaxyMapCellType.Float, planetSchema.DefaultCellType("Atmosphere_ColorR"),
+                "appearance vector component is a numeric PCC cell");
+            Equal(GalaxyMapCellType.Int, planetSchema.DefaultCellType("SunColor1"),
+                "packed appearance colour remains an integer PCC cell");
+
+            var partialPath = Path.Combine(cookedPath, "GXM_Partial.pcc");
+            new GalaxyMapTemplatePackageService().Create(
+                partialPath,
+                [GalaxyMapTable.Planet, GalaxyMapTable.PlotPlanet]);
+            var partialLayer = new PccGalaxyMapLoader().Load(partialPath, module);
+            SequenceEqual(
+                new[] { GalaxyMapTable.Planet, GalaxyMapTable.PlotPlanet },
+                partialLayer.Schemas.Keys.OrderBy(table => table),
+                "only reserved partial 2DAs are created");
+
+            var emptyPath = Path.Combine(cookedPath, "GXM_Empty.pcc");
+            new GalaxyMapTemplatePackageService().Create(emptyPath, []);
+            var emptyLayer = new PccGalaxyMapLoader().Load(emptyPath, module, allowEmpty: true);
+            Equal(0, emptyLayer.Schemas.Count, "blank reservations create no partial 2DAs");
         });
     }
 
@@ -260,7 +284,7 @@ internal static class Program
         {
             var cookedPath = Directory.CreateDirectory(Path.Combine(folder, "CookedPCConsole")).FullName;
             var packagePath = Path.Combine(cookedPath, "GXM_Write_Test.pcc");
-            new GalaxyMapTemplatePackageService().Create(packagePath);
+            new GalaxyMapTemplatePackageService().Create(packagePath, []);
             var module = new GalaxyMapModule(
                 "PCC Write Test",
                 "DLC_MOD_PCC_WRITE_TEST",
@@ -270,27 +294,61 @@ internal static class Program
                 loadOrder: 1,
                 TestReservations());
             var loader = new PccGalaxyMapLoader();
-            var layer = loader.Load(packagePath, module);
-            var workspace = new GalaxyMapWorkspace(new CsvGalaxyMapLoader().LoadBuiltInLayer(), [layer]);
+            var layer = loader.Load(packagePath, module, allowEmpty: true);
+            Equal(0, layer.Schemas.Count, "commit fixture starts without partial 2DA exports");
+            var baseLayer = new CsvGalaxyMapLoader().LoadBuiltInLayer();
+            var workspace = new GalaxyMapWorkspace(baseLayer, [layer]);
             workspace.SetActiveModule(module);
 
-            var created = new GalaxyMapRowFactory(workspace).CreateCluster("PCC Cluster", 0.25, 0.75);
+            var created = new GalaxyMapRowFactory(workspace).CreateCluster("PCC Cluster", 1, 0.75);
             new PccGalaxyMapWriter(loader).WriteTables(layer, [GalaxyMapTable.Cluster]);
 
             var reloaded = loader.Load(packagePath, module);
+            SequenceEqual(
+                new[] { GalaxyMapTable.Cluster },
+                reloaded.Schemas.Keys,
+                "commit imports only the newly required partial 2DA export");
             var actual = reloaded.Clusters.Single();
             Equal(created.RowId, actual.RowId, "committed cluster row ID");
             Equal("PCC Cluster", actual.NameText, "committed cluster name");
-            NearlyEqual(0.25, actual.X, "committed cluster X");
+            NearlyEqual(1, actual.X, "committed cluster X");
             NearlyEqual(0.75, actual.Y, "committed cluster Y");
             True(layer.Clusters.Single().CsvSnapshot?.HasChanges == false,
                 "committed row snapshot is clean");
-            Equal(GalaxyMapCellType.Float,
+            Equal(GalaxyMapCellType.Int,
                 actual.CsvSnapshot!.GetOriginalCell("X")!.Value.Type,
-                "new X cell uses canonical PCC float type");
+                "whole numeric value uses PCC integer type");
+            Equal(GalaxyMapCellType.Float,
+                actual.CsvSnapshot.GetOriginalCell("Y")!.Value.Type,
+                "decimal numeric value uses PCC float type");
             Equal(GalaxyMapCellType.Name,
                 actual.CsvSnapshot.GetOriginalCell("NameText")!.Value.Type,
                 "new NameText cell uses canonical PCC name type");
+
+            var earth = (Planet)GalaxyMapRowCloner.CloneForOverride(
+                baseLayer.Planets.Single(planet => planet.RowId == 6),
+                module);
+            earth.NameText = "Earth2";
+            earth.CsvSnapshot!.MarkDirty("NameText");
+            layer.Upsert(earth);
+            new PccGalaxyMapWriter(loader).WriteTables(layer, [GalaxyMapTable.Planet]);
+
+            var earthReloaded = loader.Load(packagePath, module).Planets.Single(planet => planet.RowId == 6);
+            Equal("Earth2", earthReloaded.NameText,
+                "BASEGAME Earth override round-trips through an on-demand Planet export");
+            using (var committedPackage = MEPackageHandler.OpenLE1Package(packagePath, forceLoadFromDisk: true))
+            {
+                foreach (var table in new[] { GalaxyMapTable.Cluster, GalaxyMapTable.Planet })
+                {
+                    var tableExport = committedPackage.Exports.Single(export =>
+                        string.Equals(
+                            export.ObjectName.Name,
+                            PccGalaxyMapLoader.SupportedExports[table],
+                            StringComparison.OrdinalIgnoreCase));
+                    Equal("BIOG_2DA_GalaxyMap_X", tableExport.Parent?.ObjectName.Name!,
+                        $"on-demand {table} export is nested under the galaxy-map package export");
+                }
+            }
 
             layer.Clusters.Single().NameText = "Externally blocked";
             layer.Clusters.Single().CsvSnapshot!.MarkDirty("NameText");
@@ -2648,6 +2706,13 @@ internal static class Program
                 new GalaxyMapTextureService(FindTextureDirectory()),
                 new GalaxyMapWorkspaceStore(Path.Combine(parent, "workspace.json")));
             True(viewModel.LoadBuiltIn(), "BASEGAME loads");
+            True(!viewModel.CreateModule(
+                    parent,
+                    "Overlapping Range",
+                    "OVERLAPPING_RANGE",
+                    ModuleColor.Red,
+                    new ModuleIdReservations(Cluster: new RowIdRange(1, 1))),
+                "reserved range cannot include a BASEGAME row ID");
             var reservations = new ModuleIdReservations(
                 Planet: new RowIdRange(6207, 6210),
                 Map: new RowIdRange(400, 401));
@@ -3053,6 +3118,7 @@ internal static class Program
         var baseLayer = loader.LoadBuiltInLayer();
         var invalidPackedColorPlanet = baseLayer.Planets.First(PlanetAppearanceCodec.IsAppearanceCapable);
         invalidPackedColorPlanet.SetExtraField("SunColor1", "not-a-packed-colour");
+        invalidPackedColorPlanet.Scale = 0;
         var workspace = new GalaxyMapWorkspace(baseLayer, [layer]);
         var diagnostics = new GalaxyMapValidator().Validate(workspace);
 
@@ -3062,6 +3128,9 @@ internal static class Program
         True(diagnostics.Any(item => item.Code == "COORDINATE-OFF-CANVAS" && item.Severity == ValidationSeverity.Warning),
             "off-canvas coordinate warning");
         True(diagnostics.Any(item => item.Code == "VALUE-NONPOSITIVE-SCALE"), "invisible-size warning");
+        True(diagnostics.All(item => item.RowId != invalidPackedColorPlanet.RowId ||
+                                     item.ColumnName != nameof(Planet.Scale)),
+            "zero Planet scale is accepted without a diagnostic");
         True(diagnostics.Any(item => item.Code == "TYPE-PLANET-PACKED-COLOR" &&
                                      item.Severity == ValidationSeverity.Warning &&
                                      item.RowId == invalidPackedColorPlanet.RowId &&
@@ -3256,8 +3325,8 @@ internal static class Program
                 .Fields.Single(field => field.Name == "X");
             NearlyEqual(0.21, double.Parse(x.Value, CultureInfo.InvariantCulture),
                 "lower-priority module instance can be inspected");
-            True(viewModel.ValidationDiagnostics.Any(item => item.Code == "ID-MODULE-COLLISION"),
-                "same-row module conflict remains diagnosed");
+            True(viewModel.ValidationDiagnostics.Any(item => item.Code == "ID-MODULE-OVERRIDE"),
+                "higher same-row module override is allowed and identified");
         });
     }
 
@@ -4419,7 +4488,7 @@ internal static class Program
     private static ModuleIdReservations AlternateReservations()
         => new(
             new RowIdRange(200, 299),
-            new RowIdRange(2000, 2099),
+            new RowIdRange(3000, 3099),
             new RowIdRange(20000, 20099),
             new RowIdRange(2000, 2099),
             new RowIdRange(2000, 2099));

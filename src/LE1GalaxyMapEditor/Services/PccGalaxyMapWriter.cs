@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using LE1GalaxyMapEditor.Models;
 using LegendaryExplorerCore.Packages;
+using LegendaryExplorerCore.Packages.CloningImportingAndRelinking;
 using LegendaryExplorerCore.Unreal;
 using LegendaryExplorerCore.Unreal.Classes;
 
@@ -10,6 +11,7 @@ namespace LE1GalaxyMapEditor.Services;
 /// <summary>Commits all requested tables in one PCC replacement transaction.</summary>
 public sealed class PccGalaxyMapWriter
 {
+    private const string TableContainerName = "BIOG_2DA_GalaxyMap_X";
     private readonly PccGalaxyMapLoader _loader;
 
     public PccGalaxyMapWriter(PccGalaxyMapLoader? loader = null)
@@ -49,13 +51,28 @@ public sealed class PccGalaxyMapWriter
             {
                 foreach (var table in requestedTables)
                 {
-                    var schema = layer.GetSchema(table)
-                        ?? throw new InvalidOperationException(
-                            $"The linked PCC does not contain the {table} partial table.");
-                    var identity = schema.SourceIdentity
-                        ?? throw new InvalidOperationException(
-                            $"The {table} table has no PCC export identity and cannot be committed.");
-                    var export = ResolveExport(package, identity);
+                    var schema = layer.GetSchema(table);
+                    ExportEntry export;
+                    GalaxyMapTableSourceIdentity identity;
+                    if (schema?.SourceIdentity is { } existingIdentity)
+                    {
+                        identity = existingIdentity;
+                        export = ResolveExport(package, identity);
+                    }
+                    else
+                    {
+                        export = ImportTemplateExport(package, table);
+                        identity = new GalaxyMapTableSourceIdentity(
+                            packagePath,
+                            export.ObjectName.Name,
+                            export.ClassName);
+                        var canonical = CsvGalaxyMapLoader.GetCanonicalSchema(table);
+                        schema = new CsvTableSchema(
+                            table,
+                            canonical.Headers,
+                            canonical.DefaultCellTypes,
+                            identity);
+                    }
                     var source = new Bio2DA(export);
                     ValidateColumns(schema, source, identity);
                     var serialized = SerializeTable(layer, table, schema, source, package);
@@ -88,6 +105,67 @@ public sealed class PccGalaxyMapWriter
         }
     }
 
+    private static ExportEntry ImportTemplateExport(IMEPackage destination, GalaxyMapTable table)
+    {
+        var exportName = PccGalaxyMapLoader.SupportedExports[table];
+        var templatePath = ApplicationResourcePaths.GetDataFilePath(
+            GalaxyMapTemplatePackageService.TemplateFileName);
+        if (!File.Exists(templatePath))
+        {
+            throw new FileNotFoundException(
+                $"Cannot create {exportName} because the galaxy-map PCC template is missing.",
+                templatePath);
+        }
+
+        using var template = MEPackageHandler.OpenLE1Package(templatePath, forceLoadFromDisk: true);
+        var matches = template.Exports.Where(candidate =>
+            !candidate.IsDefaultObject &&
+            string.Equals(candidate.ClassName, "Bio2DANumberedRows", StringComparison.Ordinal) &&
+            string.Equals(candidate.ObjectName.Name, exportName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"The PCC template must contain exactly one export named '{exportName}'.");
+        }
+
+        var containers = destination.Exports.Where(candidate =>
+            !candidate.IsDefaultObject &&
+            string.Equals(candidate.ClassName, "Package", StringComparison.Ordinal) &&
+            string.Equals(candidate.ObjectName.Name, TableContainerName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (containers.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"The PCC contains multiple package exports named '{TableContainerName}'.");
+        }
+        var container = containers.SingleOrDefault()
+            ?? destination.CreatePackageExport(new NameReference(TableContainerName));
+
+        EntryImporter.ImportAndRelinkEntries(
+            EntryImporter.PortingOption.CloneAllDependencies,
+            matches[0],
+            destination,
+            targetLinkEntry: container,
+            shouldRelink: true,
+            rop: new RelinkerOptionsPackage { ImportExportDependencies = true },
+            newEntry: out var imported);
+        if (imported is not ExportEntry importedExport ||
+            !string.Equals(importedExport.ClassName, "Bio2DANumberedRows", StringComparison.Ordinal) ||
+            !string.Equals(importedExport.ObjectName.Name, exportName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Legendary Explorer Core did not create the expected export '{exportName}'.");
+        }
+        if (!ReferenceEquals(importedExport.Parent, container))
+        {
+            throw new InvalidOperationException(
+                $"Legendary Explorer Core did not place '{exportName}' under '{TableContainerName}'.");
+        }
+
+        return importedExport;
+    }
+
     private static SerializedTable SerializeTable(
         GalaxyMapLayer layer,
         GalaxyMapTable table,
@@ -106,7 +184,10 @@ public sealed class PccGalaxyMapWriter
         var target = new Bio2DA
         {
             Export = source.Export,
-            IsIndexed = source.IsIndexed
+            // Null cells are omitted from Bio2DA binary data. Indexed storage is
+            // therefore required to preserve their positions instead of shifting
+            // every subsequent value left into the blank column.
+            IsIndexed = true
         };
         foreach (var column in source.ColumnNames)
         {
@@ -173,8 +254,8 @@ public sealed class PccGalaxyMapWriter
             : schema.DefaultCellType(column);
         return type switch
         {
-            GalaxyMapCellType.Int => SerializeInt(token, table, column, row.RowId),
-            GalaxyMapCellType.Float => SerializeFloat(token, table, column, row.RowId),
+            GalaxyMapCellType.Int or GalaxyMapCellType.Float =>
+                SerializeNumeric(token, table, column, row.RowId),
             GalaxyMapCellType.Name => GalaxyMapSourceCell.Name(token),
             GalaxyMapCellType.Null => GalaxyMapSourceCell.Null(),
             _ => throw new InvalidOperationException(
@@ -182,40 +263,29 @@ public sealed class PccGalaxyMapWriter
         };
     }
 
-    private static GalaxyMapSourceCell SerializeInt(
+    private static GalaxyMapSourceCell SerializeNumeric(
         string token,
         GalaxyMapTable table,
         string column,
         int rowId)
     {
-        if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+        if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer))
         {
-            return GalaxyMapSourceCell.Int(value);
+            return GalaxyMapSourceCell.Int(integer);
         }
         if (string.Equals(column, "RingColor", StringComparison.OrdinalIgnoreCase) &&
             uint.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var unsigned))
         {
             return GalaxyMapSourceCell.Int(unchecked((int)unsigned));
         }
-
-        throw new InvalidOperationException(
-            $"{table} row {rowId}, column '{column}' must fit its PCC integer cell type; found '{token}'.");
-    }
-
-    private static GalaxyMapSourceCell SerializeFloat(
-        string token,
-        GalaxyMapTable table,
-        string column,
-        int rowId)
-    {
-        if (float.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) &&
-            float.IsFinite(value))
+        if (float.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) &&
+            float.IsFinite(number))
         {
-            return GalaxyMapSourceCell.Float(value);
+            return GalaxyMapSourceCell.Float(number);
         }
 
         throw new InvalidOperationException(
-            $"{table} row {rowId}, column '{column}' must fit its PCC float cell type; found '{token}'.");
+            $"{table} row {rowId}, column '{column}' must be a finite PCC numeric value; found '{token}'.");
     }
 
     private static Bio2DACell ToBio2DaCell(GalaxyMapSourceCell cell, IMEPackage package)
@@ -279,11 +349,21 @@ public sealed class PccGalaxyMapWriter
                     throw new IOException(
                         $"Temporary PCC verification could not find {pair.Key} row {rowId}.");
                 }
-                var actualCells = row.CsvSnapshot.OriginalCells.Skip(1);
-                if (!pair.Value.Cells[rowId].SequenceEqual(actualCells))
+                var expectedCells = pair.Value.Cells[rowId];
+                var actualCells = row.CsvSnapshot.OriginalCells.Skip(1).ToArray();
+                for (var index = 0; index < expectedCells.Length; index++)
                 {
+                    if (expectedCells[index] == actualCells[index])
+                    {
+                        continue;
+                    }
+
+                    var column = verifiedLayer.GetSchema(pair.Key)?.Headers.ElementAtOrDefault(index + 1)
+                        ?? $"column {index + 1}";
                     throw new IOException(
-                        $"Temporary PCC verification found changed cells in {pair.Key} row {rowId}.");
+                        $"Temporary PCC verification found a changed cell in {pair.Key} row {rowId}, " +
+                        $"column '{column}': wrote {expectedCells[index].Type} '{expectedCells[index].Text}', " +
+                        $"read {actualCells[index].Type} '{actualCells[index].Text}'.");
                 }
             }
         }

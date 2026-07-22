@@ -8,16 +8,16 @@ This page describes current, verified boundaries of LE1 Galaxy Map Editor. It is
 - The complete extracted release must remain together; the executable cannot run without its adjacent resources and DLLs.
 - The full .NET runtime is not bundled.
 
-## Game-package integration
+## Game-package and DLC integration
 
-- The editor writes galaxy-map module CSVs, linked textures and module metadata.
-- It does not write PCC files, build a DLC or install content into LE1.
-- It does not resolve or edit TLK text.
-- Use Legendary Explorer and the normal ME3Tweaks Mod Manager workflow after committing.
+- The editor reads and writes the supported galaxy-map 2DA exports directly in a selected LE1 PCC.
+- It can create that PCC inside an existing DLC, but it does not create `AutoLoad.ini`, build the rest of the DLC, package a mod or install it into LE1.
+- It resolves TLK text for display from mounted module `GlobalTlk` PCCs and Legendary Explorer's current LE1 TLK selection, but it does not edit TLK content.
+- Resource PCCs registered in module settings are read-only and are used only to resolve `Texture2D` references for previews and texture choices.
 
-## BASEGAME and read-only deletion
+## BASEGAME deletion
 
-BASEGAME and mounted read-only source rows cannot be deleted because the partial 2DA format has no verified deletion marker.
+BASEGAME rows cannot be deleted because the editor never writes to its built-in source data.
 
 Deleting a writable override reveals the lower-priority source row instead of removing the underlying object.
 
@@ -29,7 +29,6 @@ Only a Relay owned solely by the active writable module can be broken. An BASEGA
 
 - Rows cannot be added or deleted directly in the grid.
 - Row IDs and managed relationship fields are read-only.
-- Extra malformed columns are not manufactured as editable workspace columns. These shouldn't be possible to import at all, however.
 - Structural editing must use the Galaxy Map workflows.
 
 ## Planet Designer
@@ -37,16 +36,16 @@ Only a Relay owned solely by the active writable module can be broken. An BASEGA
 The preview is a highly accurate, but not 100% perfect representative of LE1's rendered planet appearance. There are very minor differences in terms of postprocessing, HDR implementation, corona etc. Treat it as an accurate approximation, but not gospel.
 
 - The camera is fixed to the in-game planet view; there is no pan, rotation or zoom.
-- Only bundled vanilla textures can be displayed directly.
-- Unknown custom texture references are preserved but shown with fallback textures.
+- Bundled vanilla textures and textures resolved from registered resource PCCs can be displayed directly.
+- Unknown or unresolved custom texture references are preserved but shown with fallback textures.
 - If both hardware and software rendering fail, material parameters remain editable without a preview.
 - Copy/Paste Appearance uses an internal application clipboard rather than the Windows clipboard.
 
 ## Module priority and ID collisions
 
-Use a module priority matching the DLC mount number and keep mounted priorities unique.
+Module priority is read from `ModMount` in the DLC's `AutoLoad.ini`; keep mount values unique.
 
-The effective workspace can resolve same-ID rows by priority, but collisions between separate authoring modules are reported as validation errors. Avoid them unless the higher module is intentionally replacing the lower one and you have reviewed the result carefully.
+The effective workspace resolves same-ID rows by priority. A higher-mounted version is treated as an intentional override and reported as information. Reserved ranges still cannot overlap another reserved range or cover existing IDs supplied by BASEGAME or a lower-mounted module.
 
 New content must fit inside the authoring module's reserved ID ranges.
 
@@ -60,9 +59,9 @@ Changed Planet Shader names are a specific exception: Commit requires them to be
 
 ## Commit boundaries
 
-Each file uses a protected update, but a Commit covering several files or modules is not one all-or-nothing operation.
+Each changed galaxy-map PCC is written and verified through a temporary package replacement, but a Commit covering several modules and editor profiles is not one all-or-nothing operation.
 
-If a later write fails, earlier files may already be saved. Correct the problem and Commit the remaining unsaved changes again.
+If a later write fails, earlier PCCs or profile changes may already be saved. Correct the problem and Commit the remaining unsaved changes again.
 
 ## Undo and workspace reloads
 

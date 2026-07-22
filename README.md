@@ -1,6 +1,6 @@
 # LE1 Galaxy Map Editor
 
-LE1 Galaxy Map Editor is a Windows tool for creating and editing Mass Effect 1 galaxy-map modules (LE1 primarily, but technically functional for OT1 as well).
+LE1 Galaxy Map Editor is a Windows tool for creating and editing Mass Effect Legendary Edition galaxy-map modules for LE1.
 It combines a visual map editor, a merged 2DA table view and a highly accurate Planet Designer in one workspace.
 
 [IMAGE: LE1 Galaxy Map Editor showing the Hierarchy, Galaxy view, Properties and module bar]
@@ -13,6 +13,7 @@ It combines a visual map editor, a merged 2DA table view and a highly accurate P
 - Inspect and edit the six galaxy-map 2DA tables in a merged workspace view.
 - Design planet materials with a live preview that closely matches their appearance in LE1.
 - Mount several DLC modules, compare their rows and create overrides without changing BASEGAME files.
+- Create, open and commit galaxy-map PCCs directly through Legendary Explorer Core.
 - Validate IDs, relationships, coordinates, labels, PlotPlanet/Map links and Relay topology.
 
 ## Requirements
@@ -20,7 +21,7 @@ It combines a visual map editor, a merged 2DA table view and a highly accurate P
 - 64-bit Windows 10 or Windows 11.
 - [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0).
 
-The application itself is only a few MBs. The packed textures used for Cluster and planet previews account for most of the roughly 90 MB release archive, while the full .NET runtime is not included.
+The full .NET runtime is not included, so install the Desktop Runtime separately and keep the extracted executable, libraries and resources together.
 
 ## Documentation Map
 
@@ -41,7 +42,7 @@ The application itself is only a few MBs. The packed textures used for Cluster a
 2. Keep the executable, DLLs and `resources` folder together.
 3. Run `LE1GalaxyMapEditor.exe`.
 
-BASEGAME data loads automatically. Use **New Module** to create an authoring module, or **Open Module** to mount an existing module folder (needs to have at least one exported 2DA in CSV format).
+BASEGAME data loads automatically. Use **New Module** to create a galaxy-map PCC in an existing DLC, or **Open Module** to link an existing galaxy-map PCC. The PCC must be directly inside the DLC's `CookedPCConsole` folder, alongside a valid `AutoLoad.ini` in the DLC root.
 
 ## How edits work
 
@@ -49,14 +50,14 @@ BASEGAME module is read-only. Any edit is automatically written to your edit mod
 
 The Galaxy Map Editor, 2DA Table Editor and Planet Designer share the same uncommitted changes and Undo/Redo history. **Apply appearance** moves a Planet Designer draft into that shared history; it does not write the change to disk.
 
-Use **Commit** to write all uncommitted module changes. Your active edit module decides which version of a row is effective; matching the priority to your DLC mount number is recommended.
+Use **Commit** to write all uncommitted module changes directly to their galaxy-map PCCs. The active module chooses where new rows and overrides are authored; effective rows follow the DLC mount priority read from `AutoLoad.ini`.
 
 ## Limitations
 
-- Game packages and TLK files are not edited directly. Use Legendary Explorer for the final CSV import step and checking TLK strings are correct.
+- Galaxy-map 2DA exports are written directly, but the editor does not build a DLC, install a mod or edit TLK strings.
 - BASEGAME rows cannot be deleted directly. This is intentional to avoid accidentally mangling your workspace.
 - Inherited Relay connections can be redirected, but not broken.
-- Planet Designer cannot display unknown custom textures and has a fixed preview camera.
+- Planet Designer can resolve registered resource-PCC textures, but unresolved custom references use fallbacks and the preview camera is fixed.
 - The 2DA Table Editor cannot add or delete rows.
 
 See [Known Limitations](docs/KNOWN-LIMITATIONS.md) for more details.

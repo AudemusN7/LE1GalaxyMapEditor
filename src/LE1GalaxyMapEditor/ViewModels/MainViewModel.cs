@@ -571,7 +571,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 FolderPath: destination,
                 SuggestedName: string.IsNullOrWhiteSpace(autoLoad?.ModName) ? dlcName : autoLoad.ModName,
                 SuggestedTag: dlcName,
-                SuggestedReservations: WorkspaceWorkflowService.DefaultReservations(),
+                SuggestedReservations: ModuleIdReservations.Empty,
                 SuggestedLoadOrder: autoLoad?.ModMount ?? 0,
                 IdentityReadOnly: true));
             if (setupResult is not null)
@@ -593,7 +593,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             FolderPath: parent,
             SuggestedName: "New Galaxy Map Module",
             SuggestedTag: "NEW_GALAXY_MAP_MODULE",
-            SuggestedReservations: WorkspaceWorkflowService.DefaultReservations(),
+            SuggestedReservations: ModuleIdReservations.Empty,
             SuggestedLoadOrder: _workspaceWorkflows.NextLoadOrder()));
         if (result is not null)
         {

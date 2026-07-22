@@ -67,19 +67,19 @@ An invalid edit does not create an Undo entry.
 
 The general diagnostic list is advisory. **Commit** is not disabled merely because the list contains an error.
 
-Resolve reported errors before packaging or testing your mod. Some data may be valid CSV while still being unusable or unsafe in LE1. The galaxy 2DA system is documented but not extensively stress tested for edge cases.
+Resolve reported errors before packaging or testing your mod. A value can be serialisable in a PCC while still being unusable or unsafe in LE1. The galaxy 2DA system is documented but not extensively stress tested for edge cases.
 
 Changed Planet Shader values have an additional commit-time check. Each must be non-empty and unique across all mounted planet-row versions; Commit is blocked until those Shader problems are corrected.
 
 ## If Commit fails
 
-The editor uses protected file updates so a failed write cannot leave a partially written CSV. Each output file is saved separately.
+For each changed module, the editor writes a temporary PCC, reloads it, verifies the requested tables and confirms that the original PCC has not changed externally before replacing it.
 
-If a later file fails, earlier files may already have been written successfully. Their changes are cleared, while the remaining unsaved changes stay available.
+If a later module or editor-profile update fails, earlier modules may already have been written successfully. Their changes are cleared, while the remaining unsaved changes stay available.
 
 1. Read the red error banner.
-2. Close anything that may have locked the module file.
-3. Check that the module folder is writable and available.
+2. Close anything that may have locked the galaxy-map PCC.
+3. Check that the PCC and its `CookedPCConsole` folder are writable and available.
 4. Choose **Commit** again to write the remaining changes.
 
 Undo/Redo history is cleared after a partially successful Commit because some changes are already on disk.
@@ -90,7 +90,7 @@ Undo/Redo history is cleared after a partially successful Commit because some ch
 
 - A relationship points to a missing or incompatible row.
 - A new ID is outside its module's reserved range.
-- Two mounted modules use the same table and Row ID.
+- A reserved range overlaps another range or an existing lower-layer row ID.
 - Coordinates or scale are outside expected values.
 - `PlanetLevelType` is 3, 5 or 7; these values are known not to work correctly in LE1.
 - A Relay is incomplete, duplicated or resolves to an invalid Cluster.

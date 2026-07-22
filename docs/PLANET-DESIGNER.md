@@ -52,11 +52,11 @@ The controls are divided into nine groups:
 
 Hover over a control for its parameter description.
 
-### Link a module texture
+### Use a module texture
 
-Choose **Link module texture...** below Identity to add a custom texture. Enter its full in-memory seek-free reference, select one or more menus where it should be available (**Continent**, **Normals**, **Ocean**, **City Emissive** or **Atmosphere**), then browse for the local preview image.
+For PCC-backed modules, open the module settings and register one or more read-only resource PCCs from the same DLC. Their `Texture2D` exports become available to the Planet Designer's compatible texture menus and can be resolved in the live preview by their in-memory package path.
 
-The editor stages the image under the module's `textures` folder and records the relationship in `module.json`. The local filename is deliberately independent from the in-memory reference written to `GalaxyMap_Planet.csv`. Editing that reference later in the Planet 2DA table updates the metadata relationship without renaming or losing the staged image.
+The editor never copies or modifies a registered resource PCC. Loose preview-image links and module `textures` folders are not used by the PCC workflow. A typed reference that cannot be found in a registered package is preserved but uses a fallback in the preview.
 
 ## Control types
 
@@ -91,7 +91,7 @@ The preview uses a fixed camera that matches the in-game view. It does not pan, 
 
 ## Preview textures and rendering
 
-Bundled texture references render directly. Linked module textures use their staged local image immediately, including before Commit. An unknown, unlinked custom texture reference is preserved in the data but displayed with a fallback texture in the preview.
+Bundled texture references render directly. References found in the active or registered resource PCCs use the package's texture data. An unknown or unresolved custom texture reference is preserved in the data but displayed with a fallback texture in the preview.
 
 Check the **fallback textures** detail when the preview does not match your intended custom asset.
 
@@ -113,11 +113,9 @@ Choose **Randomise** to create a guarded variation of a BASEGAME planet material
 
 The status bar identifies the donor planet and generation seed. The system is designed to pick a basegame planet and then randomise various aspects of its appearance with a roughly 35% variation. This allows them to maintain consistency with vanilla while providing you with interesting variations to base more extensive edits on.
 
-Linked custom Planet textures from mounted modules participate in randomisation. Each texture is considered only for the material categories selected when it was linked, and each compatible texture slot has a 35% chance to use a custom option when one is available.
+Compatible Planet textures discovered in mounted module packages can participate in randomisation. Each compatible texture slot has a 35% chance to use a custom option when one is available.
 
-Choose **Manage textures...** below Identity to inspect linked textures, their module, categories, availability and current Planet-row reference count. **Unlink selected** removes the relationship from writable module metadata and immediately removes it from randomisation and selectable dropdown options.
-
-When a linked texture is missing and no staged copy is available, the Designer marks the relationship unavailable and excludes it from dropdowns and randomisation. Use **Manage textures...** to unlink the stale relationship or relink the same in-memory path to a replacement preview image.
+Manage the available package set from the module settings under **Read-only resource PCCs**. Remove a registration to stop using that package as a texture source; the PCC itself remains untouched.
 
 ## Personal templates
 

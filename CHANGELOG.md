@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### PCC authoring with Legendary Explorer Core
+
+- Replaced the loose `_part.csv` authoring workflow with direct loading and writing of LE1 galaxy-map PCC exports through Legendary Explorer Core.
+- Added creation of a row-empty galaxy-map PCC inside an existing DLC's `CookedPCConsole` folder. Only tables with reserved ID ranges are included initially; Commit adds a missing supported export when that table is later used.
+- Added discovery of DLC identity, display name and mount priority from the containing DLC folder and `AutoLoad.ini`.
+- Added editor-owned module profiles under `%LocalAppData%\LE1GalaxyMapEditor\modules`, so the editor no longer adds `module.json` or other metadata files to the DLC.
+- Added direct opening, unlinking, relinking and forgetting of PCC-backed module profiles.
+- Added safe PCC replacement, temporary-package verification and detection of packages changed outside the editor.
+- Added read-only resource-PCC registration for resolving custom `Texture2D` references in map and Planet Designer previews.
+- Added TLK lookup from mounted DLC `GlobalTlk` PCCs and Legendary Explorer's selected LE1 TLK cache. TLK content remains read-only.
+- Changed intentional same-ID rows in higher-mounted modules from collision errors to informational overrides.
+- Added validation preventing reserved ranges from covering ranges or existing row IDs in lower-mounted layers.
+- Allowed a System scale of zero and improved PCC numeric cell typing and round-trip fidelity.
+
 ## 1.2.1 — 19 July 2026
 
 This release is a substantial expansion over the original `v1.0.0` release. It adds the Planet Designer, a merged 2DA editor, safer editing workflows, stronger validation and a much more complete module-management experience.
@@ -59,4 +75,3 @@ This release is a substantial expansion over the original `v1.0.0` release. It a
 
 - Windows 10 or Windows 11, 64-bit.
 - .NET 10 Desktop Runtime.
-

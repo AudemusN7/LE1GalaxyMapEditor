@@ -30,7 +30,10 @@ public sealed class PccGalaxyMapLoader
         _modelLoader = modelLoader ?? new CsvGalaxyMapLoader();
     }
 
-    public GalaxyMapLayer Load(string packagePath, GalaxyMapModule module)
+    public GalaxyMapLayer Load(
+        string packagePath,
+        GalaxyMapModule module,
+        bool allowEmpty = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
         ArgumentNullException.ThrowIfNull(module);
@@ -76,7 +79,7 @@ public sealed class PccGalaxyMapLoader
                 exception);
         }
 
-        if (tables.Count == 0)
+        if (tables.Count == 0 && !allowEmpty)
         {
             throw new GalaxyMapLoadException(
                 $"'{fullPath}' does not contain a supported galaxy-map partial 2DA export.");
@@ -87,6 +90,13 @@ public sealed class PccGalaxyMapLoader
         {
             throw new GalaxyMapLoadException(
                 $"'{fullPath}' changed while it was being loaded. Refresh and try again.");
+        }
+
+        if (tables.Count == 0)
+        {
+            var emptyLayer = new GalaxyMapLayer(module);
+            emptyLayer.SetPackageSource(fullPath, finalFingerprint);
+            return emptyLayer;
         }
 
         var projected = tables.ToDictionary(
