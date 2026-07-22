@@ -29,8 +29,10 @@ public sealed record SessionMutationRequest(
 public sealed class EditSessionService
 {
     private readonly EditorSession _session;
-    private readonly GalaxyMapCsvWriter _writer;
+    private readonly GalaxyMapCsvWriter _legacyCsvWriter;
+    private readonly PccGalaxyMapWriter _pccWriter;
     private readonly GalaxyMapModuleManifestStore _manifestStore;
+    private readonly GalaxyMapModuleProfileStore _profileStore;
     private bool _editSnapshotCaptured;
     private EditHistorySnapshot? _historyBeforeUserEdit;
     private EditChangeSetSnapshot? _changesBeforeUserEdit;
@@ -38,11 +40,15 @@ public sealed class EditSessionService
     public EditSessionService(
         EditorSession session,
         GalaxyMapCsvWriter? writer = null,
-        GalaxyMapModuleManifestStore? manifestStore = null)
+        GalaxyMapModuleManifestStore? manifestStore = null,
+        PccGalaxyMapWriter? pccWriter = null,
+        GalaxyMapModuleProfileStore? profileStore = null)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
-        _writer = writer ?? new GalaxyMapCsvWriter();
+        _legacyCsvWriter = writer ?? new GalaxyMapCsvWriter();
+        _pccWriter = pccWriter ?? new PccGalaxyMapWriter();
         _manifestStore = manifestStore ?? new GalaxyMapModuleManifestStore();
+        _profileStore = profileStore ?? new GalaxyMapModuleProfileStore();
     }
 
     public bool IsApplying { get; private set; }
@@ -297,18 +303,36 @@ public sealed class EditSessionService
                             .Where(row => row.CsvSnapshot?.DirtyColumns.Count > 0)
                             .Select(row => row.Key)
                             .ToArray());
-                    _writer.WriteTables(layer, tables, table =>
+                    if (layer.SourcePackagePath is not null)
                     {
+                        _pccWriter.WriteTables(layer, tables);
                         committedProgress = true;
-                        committedTables.Add(table);
-                        committedRows.UnionWith(dirtyRows[table]);
-                    });
+                        foreach (var table in tables)
+                        {
+                            committedTables.Add(table);
+                            committedRows.UnionWith(dirtyRows[table]);
+                        }
+                    }
+                    else
+                    {
+                        _legacyCsvWriter.WriteTables(layer, tables, table =>
+                        {
+                            committedProgress = true;
+                            committedTables.Add(table);
+                            committedRows.UnionWith(dirtyRows[table]);
+                        });
+                    }
                 }
 
                 var metadataDirty = _session.Changes.IsMetadataDirty(tag);
+                if (metadataDirty && layer.Module.IsPccBacked)
+                {
+                    _profileStore.Save(GalaxyMapModuleProfile.FromModule(layer.Module));
+                    committedProgress = true;
+                }
                 var hasOwnedManifest = layer.Module.FolderPath is { } folderPath &&
                                        File.Exists(Path.Combine(folderPath, GalaxyMapModuleManifestStore.FileName));
-                if ((metadataDirty || files.Count > 0) &&
+                if (!layer.Module.IsPccBacked && (metadataDirty || files.Count > 0) &&
                     (!layer.Module.IsReadOnly || hasOwnedManifest))
                 {
                     _manifestStore.Save(layer.Module);
@@ -395,7 +419,7 @@ public sealed class EditSessionService
         workspace.Recompose();
         ClearHistory();
         _session.Publish(ChangeImpact.StructuralAll);
-        return WorkflowResult.Success("Committed all staged module changes to CSV.", impact: ChangeImpact.StructuralAll);
+        return WorkflowResult.Success("Committed all staged module changes.", impact: ChangeImpact.StructuralAll);
     }
 
     private string? ValidateChangedPlanetShaders(GalaxyMapWorkspace workspace)

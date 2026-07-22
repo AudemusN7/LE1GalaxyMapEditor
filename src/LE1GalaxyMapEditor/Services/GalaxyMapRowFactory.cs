@@ -164,7 +164,7 @@ public sealed partial class GalaxyMapRowFactory
         where T : GalaxyMapRow
     {
         var layer = RequireActiveLayer();
-        var schema = CsvGalaxyMapLoader.GetCanonicalSchema(row.Table);
+        var schema = layer.GetSchema(row.Table) ?? CsvGalaxyMapLoader.GetCanonicalSchema(row.Table);
         if (layer.GetSchema(row.Table) is null)
         {
             layer.SetSchema(schema);
@@ -199,9 +199,12 @@ public sealed partial class GalaxyMapRowFactory
 
         row.CsvSnapshot = snapshot;
         layer.Upsert(row);
-        layer.SetSourceRowOrder(
-            row.Table,
-            layer.Rows(row.Table).Select(candidate => candidate.RowId).OrderBy(rowId => rowId));
+        var sourceOrder = layer.GetSourceRowOrder(row.Table).ToList();
+        if (!sourceOrder.Contains(row.RowId))
+        {
+            sourceOrder.Add(row.RowId);
+        }
+        layer.SetSourceRowOrder(row.Table, sourceOrder);
         return row;
     }
 

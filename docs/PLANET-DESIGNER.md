@@ -34,9 +34,7 @@ Planet Designer has two stages of editing:
 
 Closing the Designer or switching planets with an unapplied draft offers **Apply**, **Discard** and **Cancel**.
 
-Applying appearance creates one Undo entry, regardless of how many material controls changed. Shared Undo and Redo can affect changes made elsewhere in the application.
-
-Designer Undo/Redo operates on applied workspace changes, not individual draft inputs. Apply or discard the current draft before using it.
+Undo and Redo first step through individual material-property changes in the current draft. Applying appearance clears that draft history and creates one shared workspace Undo entry, regardless of how many material controls changed. With no draft history pending, the Designer controls can also undo or redo applied workspace changes.
 
 ## Material groups
 

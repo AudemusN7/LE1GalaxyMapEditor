@@ -113,12 +113,15 @@ public sealed class MainInspectorPresentationWorkflow(
         switch (row)
         {
             case Cluster cluster:
+                if (session.ActiveModule?.IsPccBacked != true)
+                {
                 actions.Add(new InspectorActionDescriptor(
                     InspectorActionId.LinkClusterTexture,
                     "Cluster background texture",
                     "Link module texture…",
                     "Choose a PNG, JPEG, BMP, GIF, or TIFF image to stage inside the target module's textures folder.",
                     IsPrimary: true));
+                }
                 AddRelayActions(cluster, actions);
                 break;
             case Planet planet:

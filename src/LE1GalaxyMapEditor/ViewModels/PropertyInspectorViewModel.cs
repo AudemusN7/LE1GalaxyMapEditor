@@ -1,11 +1,13 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using LE1GalaxyMapEditor.Infrastructure;
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Presentation;
 using LE1GalaxyMapEditor.Services;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.ViewModels;
 
@@ -19,8 +21,10 @@ public sealed record InspectorFieldOption(string Value, string Label)
 public sealed class InspectorFieldViewModel : ObservableObject
 {
     private readonly Func<string, string?> _apply;
+    private readonly Func<string, GalaxyMapStrRefPresentation>? _resolveStrRef;
     private string _value;
     private string? _validationError;
+    private GalaxyMapStrRefPresentation? _strRefLookup;
 
     public InspectorFieldViewModel(
         string name,
@@ -35,7 +39,10 @@ public sealed class InspectorFieldViewModel : ObservableObject
         Name = name;
         DisplayName = metadata?.DisplayName ?? name;
         Description = metadata?.Description ?? string.Empty;
+        IsStrRef = metadata?.IsStrRef == true;
+        _resolveStrRef = metadata?.ResolveStrRef;
         _value = value;
+        _strRefLookup = _resolveStrRef?.Invoke(value);
         IsMain = isMain;
         IsReadOnly = isReadOnly;
         _apply = apply;
@@ -50,6 +57,12 @@ public sealed class InspectorFieldViewModel : ObservableObject
         ? Description
         : string.IsNullOrWhiteSpace(Description) ? ValidationError! : $"{Description}\n\nValidation: {ValidationError}";
     public bool IsMain { get; }
+    public bool IsStrRef { get; }
+    public GalaxyMapStrRefPresentation? StrRefLookup
+    {
+        get => _strRefLookup;
+        private set => SetProperty(ref _strRefLookup, value);
+    }
     public bool IsReadOnly { get; }
     public bool IsEditable => !IsReadOnly;
     public InspectorEditorKind EditorKind { get; }
@@ -100,6 +113,7 @@ public sealed class InspectorFieldViewModel : ObservableObject
             }
 
             ValidationError = _apply(value);
+            StrRefLookup = _resolveStrRef?.Invoke(value);
             OnPropertyChanged(nameof(IsChecked));
             OnPropertyChanged(nameof(SelectedOption));
             OnPropertyChanged(nameof(ColorPreview));
@@ -175,6 +189,8 @@ public sealed class PropertyInspectorViewModel : ObservableObject
     public static GridLength LabelColumnWidth { get; } = new(146);
 
     private readonly IInspectorPresentationWorkflow _workflow;
+    private readonly GalaxyMapTlkService? _tlk;
+    private readonly Func<GalaxyMapModule, MELocalization> _localeForModule;
     private string _title = "Nothing selected";
     private string _subtitle = "Select an item in the hierarchy or on the map.";
     private bool _hasSelection;
@@ -182,8 +198,15 @@ public sealed class PropertyInspectorViewModel : ObservableObject
     private GalaxyMapTable _currentTable;
     private GalaxyMapRow? _currentRow;
 
-    public PropertyInspectorViewModel(IInspectorPresentationWorkflow? workflow = null)
-        => _workflow = workflow ?? NullInspectorPresentationWorkflow.Instance;
+    public PropertyInspectorViewModel(
+        IInspectorPresentationWorkflow? workflow = null,
+        GalaxyMapTlkService? tlk = null,
+        Func<GalaxyMapModule, MELocalization>? localeForModule = null)
+    {
+        _workflow = workflow ?? NullInspectorPresentationWorkflow.Instance;
+        _tlk = tlk;
+        _localeForModule = localeForModule ?? (module => module.TlkLocale);
+    }
 
     public ObservableCollection<InspectorSectionViewModel> Sections { get; } = [];
     public string Title { get => _title; private set => SetProperty(ref _title, value); }
@@ -301,6 +324,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             Text("Label", () => row.Label, value => SetManaged(row, nameof(Planet.Label), value, () => row.Label = value)),
             Int("Name", () => row.Name, value => SetManaged(row, nameof(Planet.Name), value, () => row.Name = value)),
             Text("NameText", () => row.NameText, value => SetManaged(row, nameof(Planet.NameText), value, () => row.NameText = value)),
+            NullableInt("Description", () => row.Description, value => row.Description = value),
             Dropdown("System", () => row.SystemRowId, value => SetManaged(row, nameof(Planet.SystemRowId), value, () => row.SystemRowId = value),
                 _workflow.GetOptions(InspectorOptionSet.Systems)),
             ReadOnlyInt("ActiveWorld", () => row.ActiveWorld),
@@ -320,11 +344,6 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             Color("RingColor", () => row.RingColor, value => row.RingColor = value),
             NullableInt("ImageIndex", () => row.ImageIndex, value => row.ImageIndex = value)
         ], detail: "What the object looks like on the System map and after selection."));
-        Sections.Add(new InspectorSectionViewModel("Text and interaction", [
-            NullableInt("Description", () => row.Description, value => row.Description = value),
-            NullableInt("ButtonLabel", () => row.ButtonLabel, value => row.ButtonLabel = value),
-            Text("Event", () => row.Event, value => row.Event = value)
-        ], detail: "Localised text, use-button behaviour and the Kismet Remote Event."));
         AddPlanetExtraFields(row);
 
         AddWorkflowActionSections(row, "Optional relationships");
@@ -418,8 +437,20 @@ public sealed class PropertyInspectorViewModel : ObservableObject
         var destinationInternals = new[] { "ExitMap", "PlanetRotation" };
         var appearance = names.Where(PlanetAppearanceSchema.IsAppearanceColumn).ToArray();
 
-        AddExtraFields(row, "Visibility and usability", availability,
-            detail: "Visibility, object interaction and use-button rules are independent three-part rules.");
+        var availabilityFields = new List<InspectorFieldViewModel>
+        {
+            NullableInt("ButtonLabel", () => row.ButtonLabel, value => row.ButtonLabel = value),
+            Text("Event", () => row.Event, value => row.Event = value)
+        };
+        availabilityFields.AddRange(CreateExtraFields(row, availability));
+        Sections.Add(new InspectorSectionViewModel(
+            "Visibility and usability",
+            availabilityFields,
+            [new InspectorActionViewModel(
+                "Set these rules to Always",
+                () => SetAvailabilityAlways(row, availability),
+                "Writes each independent triplet as 1 / 974 / 1.")],
+            "Visibility, object interaction and use-button rules are independent three-part rules."));
         AddExtraFields(row, "Destination / unused internals", destinationInternals, isExpanded: false,
             detail: "Rare or unverified fields kept available without cluttering routine editing.");
         AddExtraFields(row, "Legacy event routing", legacyEvents, isExpanded: false,
@@ -442,20 +473,9 @@ public sealed class PropertyInspectorViewModel : ObservableObject
         var names = fieldNames
             .Where(row.ExtraFields.ContainsKey)
             .ToArray();
-        var fields = names
-            .Select(name => new InspectorFieldViewModel(name, row.ExtraFields[name], false, forceReadOnly || !_currentEditable, value =>
-            {
-                if (Validate(row, $"ExtraFields[{name}]", value) is { } error)
-                {
-                    return error;
-                }
-                _workflow.BeginEdit();
-                SetManaged(row, $"ExtraFields[{name}]", value, () => row.SetExtraField(name, value));
-                return null;
-            }, ExtraEditor(name), ExtraOptions(name), GalaxyMapPropertyCatalog.Get(row.Table, name)))
-            .ToArray();
+        var fields = CreateExtraFields(row, names, forceReadOnly);
 
-        if (fields.Length > 0)
+        if (fields.Count > 0)
         {
             var actions = new List<InspectorActionViewModel>();
             if (!forceReadOnly && names.All(IsAvailabilityField))
@@ -469,6 +489,24 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             Sections.Add(new InspectorSectionViewModel(title, fields, actions, detail, isExpanded));
         }
     }
+
+    private IReadOnlyList<InspectorFieldViewModel> CreateExtraFields(
+        GalaxyMapRow row,
+        IEnumerable<string> fieldNames,
+        bool forceReadOnly = false)
+        => fieldNames
+            .Where(row.ExtraFields.ContainsKey)
+            .Select(name => new InspectorFieldViewModel(name, row.ExtraFields[name], false, forceReadOnly || !_currentEditable, value =>
+            {
+                if (Validate(row, $"ExtraFields[{name}]", value) is { } error)
+                {
+                    return error;
+                }
+                _workflow.BeginEdit();
+                SetManaged(row, $"ExtraFields[{name}]", value, () => row.SetExtraField(name, value));
+                return null;
+            }, ExtraEditor(name), ExtraOptions(name), Metadata(name)))
+            .ToArray();
 
     private void AddRemainingExtraFields(
         GalaxyMapRow row,
@@ -530,11 +568,11 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             _workflow.BeginEdit();
             setter(value);
             return null;
-        }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
+        }, metadata: Metadata(name));
 
     private InspectorFieldViewModel ReadOnlyText(string name, Func<string> getter, bool isMain = true)
         => new(name, getter(), isMain, true, _ => null,
-            metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
+            metadata: Metadata(name));
 
     private InspectorFieldViewModel Int(
         string name, Func<int> getter, Action<int> setter, bool isMain = true)
@@ -548,11 +586,11 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             if (ValidateCurrent(name, parsed) is { } error) return error;
             _workflow.BeginEdit(); setter(parsed);
             return null;
-        }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
+        }, metadata: Metadata(name));
 
     private InspectorFieldViewModel ReadOnlyInt(string name, Func<int> getter, bool isMain = true)
         => new(name, getter().ToString(CultureInfo.InvariantCulture), isMain, true, _ => null,
-            metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
+            metadata: Metadata(name));
 
     private InspectorFieldViewModel NullableInt(
         string name, Func<int?> getter, Action<int?> setter, bool isMain = true)
@@ -573,7 +611,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             if (ValidateCurrent(name, parsed) is { } error) return error;
             _workflow.BeginEdit(); setter(parsed);
             return null;
-        }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
+        }, metadata: Metadata(name));
 
     private InspectorFieldViewModel Number(
         string name, Func<double> getter, Action<double> setter, bool isMain = true)
@@ -593,7 +631,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             if (ValidateCurrent(name, parsed) is { } error) return error;
             _workflow.BeginEdit(); setter(parsed);
             return null;
-        }, metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
+        }, metadata: Metadata(name));
 
     private InspectorFieldViewModel Checkbox(string name, Func<int> getter, Action<int> setter)
         => new(name, getter() == 0 ? "0" : "1", true, IsReadOnly(name), value =>
@@ -602,7 +640,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             if (ValidateCurrent(name, parsed) is { } error) return error;
             _workflow.BeginEdit(); setter(parsed); return null;
         }, InspectorEditorKind.Checkbox,
-            metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
+            metadata: Metadata(name));
 
     private InspectorFieldViewModel Dropdown(string name, Func<int> getter, Action<int> setter, IReadOnlyList<InspectorFieldOption> options)
         => new(name, getter().ToString(CultureInfo.InvariantCulture), true, IsReadOnly(name), value =>
@@ -611,7 +649,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             if (ValidateCurrent(name, parsed) is { } error) return error;
             _workflow.BeginEdit(); setter(parsed); return null;
         }, InspectorEditorKind.Dropdown, options,
-            GalaxyMapPropertyCatalog.Get(_currentTable, name));
+            Metadata(name));
 
     private InspectorFieldViewModel NullableDropdown(string name, Func<int?> getter, Action<int?> setter, IReadOnlyList<InspectorFieldOption> options)
         => new(name, getter()?.ToString(CultureInfo.InvariantCulture) ?? "", true, IsReadOnly(name), value =>
@@ -625,7 +663,7 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             if (ValidateCurrent(name, parsed) is { } error) return error;
             _workflow.BeginEdit(); setter(parsed); return null;
         }, InspectorEditorKind.Dropdown, options,
-            GalaxyMapPropertyCatalog.Get(_currentTable, name));
+            Metadata(name));
 
     private InspectorFieldViewModel Color(string name, Func<long> getter, Action<long> setter)
         => new(name, getter().ToString(CultureInfo.InvariantCulture), true, IsReadOnly(name), value =>
@@ -634,7 +672,21 @@ public sealed class PropertyInspectorViewModel : ObservableObject
             if (ValidateCurrent(name, parsed) is { } error) return error;
             _workflow.BeginEdit(); setter(parsed); return null;
         }, InspectorEditorKind.Color,
-            metadata: GalaxyMapPropertyCatalog.Get(_currentTable, name));
+            metadata: Metadata(name));
+
+    private GalaxyMapPropertyMetadata Metadata(string name)
+    {
+        var metadata = GalaxyMapPropertyCatalog.Get(_currentTable, name);
+        if (!metadata.IsStrRef || _currentRow?.Origin?.Module is not { } module)
+        {
+            return metadata;
+        }
+
+        return metadata with
+        {
+            ResolveStrRef = token => GalaxyMapStrRefPresenter.Present(_tlk, _localeForModule(module), token)
+        };
+    }
 
     private string? ValidateCurrent(string propertyName, object? value)
         => _currentRow is null ? null : Validate(_currentRow, propertyName, value);

@@ -36,10 +36,14 @@ public sealed record CommitPreview(
 /// </summary>
 public sealed class CommitPreviewBuilder(
     GalaxyMapModuleManifestStore? manifestStore = null,
-    CsvGalaxyMapLoader? loader = null)
+    CsvGalaxyMapLoader? loader = null,
+    PccGalaxyMapLoader? pccLoader = null,
+    GalaxyMapModuleProfileStore? profileStore = null)
 {
     private readonly GalaxyMapModuleManifestStore _manifestStore = manifestStore ?? new GalaxyMapModuleManifestStore();
     private readonly CsvGalaxyMapLoader _loader = loader ?? new CsvGalaxyMapLoader();
+    private readonly PccGalaxyMapLoader _pccLoader = pccLoader ?? new PccGalaxyMapLoader(loader);
+    private readonly GalaxyMapModuleProfileStore _profileStore = profileStore ?? new GalaxyMapModuleProfileStore();
 
     public CommitPreview Build(EditorSession session)
     {
@@ -84,7 +88,9 @@ public sealed class CommitPreviewBuilder(
                     ];
                 }
 
-                var fileName = $"GalaxyMap_{table}_part.csv";
+                var fileName = layer.SourcePackagePath is null
+                    ? $"GalaxyMap_{table}_part.csv"
+                    : Path.GetFileName(layer.SourcePackagePath);
                 sections.Add(new CommitPreviewSection(ModuleDisplay(layer.Module), fileName, entries));
                 files.Add((tag, fileName));
                 changeCount += entries.Sum(ChangeUnits);
@@ -102,9 +108,9 @@ public sealed class CommitPreviewBuilder(
             var details = BuildMetadataDetails(module);
             sections.Add(new CommitPreviewSection(
                 ModuleDisplay(module),
-                GalaxyMapModuleManifestStore.FileName,
+                module.IsPccBacked ? module.ProfileId + ".json" : GalaxyMapModuleManifestStore.FileName,
                 [new CommitPreviewEntry("Module settings", details)]));
-            files.Add((tag, GalaxyMapModuleManifestStore.FileName));
+            files.Add((tag, module.IsPccBacked ? module.ProfileId + ".json" : GalaxyMapModuleManifestStore.FileName));
             changeCount += Math.Max(1, details.Count);
         }
 
@@ -246,7 +252,7 @@ public sealed class CommitPreviewBuilder(
     private static CommitPreviewEntry BuildDeletedRowEntry(GalaxyMapRow row)
         => new(
             $"{TableDisplay(row.Table)} #{row.RowId}",
-            ["This row will be removed from the module CSV."],
+            ["This row will be removed from the module's partial 2DA."],
             "DELETE");
 
     private GalaxyMapLayer? LoadCommittedLayer(GalaxyMapModule module)
@@ -258,6 +264,10 @@ public sealed class CommitPreviewBuilder(
 
         try
         {
+            if (module.IsPccBacked && module.GalaxyMapPackagePath is not null)
+            {
+                return _pccLoader.Load(module.GalaxyMapPackagePath, module);
+            }
             return _loader.LoadPartFolder(module.FolderPath, module);
         }
         catch (GalaxyMapLoadException)
@@ -268,6 +278,35 @@ public sealed class CommitPreviewBuilder(
 
     private IReadOnlyList<string> BuildMetadataDetails(GalaxyMapModule current)
     {
+        if (current.IsPccBacked && current.ProfileId is not null)
+        {
+            try
+            {
+                var original = _profileStore.Load(current.ProfileId);
+                var details = new List<string>();
+                AddChanged(details, "Display name", original.DisplayName ?? current.Name, current.Name);
+                AddChanged(details, "Colour", original.ModuleColor.ToString(), current.Color.ToString());
+                AddChanged(details, "TLK locale", original.TlkLocale.ToString(), current.TlkLocale.ToString());
+                foreach (var table in Enum.GetValues<GalaxyMapTable>().Where(table => table != GalaxyMapTable.PlotPlanet))
+                {
+                    AddChanged(details, $"{TableDisplay(table)} ID range",
+                        original.Reservations.GetRange(table)?.ToString() ?? "(none)",
+                        current.Reservations.GetRange(table)?.ToString() ?? "(none)");
+                }
+                if (!original.ResourcePackages.SequenceEqual(
+                        GalaxyMapModuleProfile.FromModule(current).ResourcePackages,
+                        StringComparer.OrdinalIgnoreCase))
+                {
+                    details.Add("Resource PCC registrations: updated");
+                }
+                return details.Count == 0 ? ["Module profile will be updated."] : details;
+            }
+            catch (GalaxyMapLoadException)
+            {
+                return ["Module profile will be updated."];
+            }
+        }
+
         if (current.FolderPath is null ||
             !File.Exists(Path.Combine(current.FolderPath, GalaxyMapModuleManifestStore.FileName)))
         {

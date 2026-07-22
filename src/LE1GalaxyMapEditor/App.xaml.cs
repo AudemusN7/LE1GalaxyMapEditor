@@ -37,6 +37,7 @@ public partial class App : Application
 
         try
         {
+            LegendaryExplorerCoreService.Initialize(TaskScheduler.FromCurrentSynchronizationContext());
             var viewModel = LoadViewModel(e.Args);
 
             MainWindow editor;
@@ -56,6 +57,7 @@ public partial class App : Application
             await Dispatcher.InvokeAsync(
                 () => _startupTrace.Mark("MainWindow dispatcher idle; editor usable"),
                 DispatcherPriority.ContextIdle);
+            viewModel.WarmPlanetPreviewTextures();
 
             // Persist timings away from the measured startup path.
             _ = _startupTrace.SaveAsync();
@@ -83,7 +85,12 @@ public partial class App : Application
         MainViewModel viewModel;
         using (_startupTrace.Measure("Construct MainViewModel"))
         {
-            viewModel = new MainViewModel(new CsvGalaxyMapLoader(), textures);
+            var baseGameSettings = new BaseGameSettingsStore();
+            viewModel = new MainViewModel(
+                new CsvGalaxyMapLoader(),
+                textures,
+                baseGameTlkLocale: baseGameSettings.LoadLocale(),
+                saveBaseGameLocale: baseGameSettings.SaveLocale);
         }
 
         using (_startupTrace.Measure("Load BASEGAME and remembered modules"))

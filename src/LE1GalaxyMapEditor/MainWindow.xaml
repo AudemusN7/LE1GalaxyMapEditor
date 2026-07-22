@@ -205,12 +205,19 @@
                 </DockPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Background="#183225" BorderBrush="#315E43" BorderThickness="1" CornerRadius="3" Padding="9,5" Margin="0,0,10,0" VerticalAlignment="Center">
+                    <Button Command="{Binding ConfigureBaseGameCommand}"
+                            Background="#183225"
+                            BorderBrush="#315E43"
+                            BorderThickness="1"
+                            Padding="9,5"
+                            Margin="0,0,10,0"
+                            VerticalAlignment="Center"
+                            ToolTip="{Binding BaseGameToolTip}">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Ellipse Width="6" Height="6" Fill="#69CF8F" Margin="0,0,6,0" VerticalAlignment="Center" />
                             <TextBlock Text="BASEGAME READ-ONLY" Foreground="#90D8A9" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center" />
                         </StackPanel>
-                    </Border>
+                    </Button>
                     <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" MaxWidth="360" Margin="0,0,8,0">
                         <ItemsControl ItemsSource="{Binding ModuleBarItems}">
                             <ItemsControl.ItemsPanel>
@@ -273,7 +280,7 @@
                             Content="Refresh"
                             Style="{StaticResource ChromeButtonStyle}"
                             Padding="10,6"
-                            ToolTip="Reload BASEGAME and every module remembered in workspace.json, then rerun validation" />
+                            ToolTip="Reload BASEGAME, every loaded DLC module and TLK table, then rerun validation checks" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -597,7 +604,7 @@
                                                                     </TextBlock.Style>
                                                                 </TextBlock>
                                                                 <Grid Grid.Column="1">
-                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                                                     <TextBox Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                                                              IsReadOnly="{Binding IsReadOnly}" PreviewKeyDown="InspectorField_OnPreviewKeyDown"
                                                                              Style="{StaticResource InspectorTextBoxStyle}"
@@ -612,6 +619,9 @@
                                                                     <ComboBox ItemsSource="{Binding Options}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedOption, Mode=TwoWay}"
                                                                               IsEnabled="{Binding IsEditable}" ToolTip="{Binding ToolTipText}" ToolTipService.ShowDuration="30000"
                                                                               Visibility="{Binding IsDropdownEditor, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                                                    <controls:StrRefLookupControl Grid.Column="2" Margin="4,0,0,0"
+                                                                                                  Presentation="{Binding StrRefLookup}"
+                                                                                                  Visibility="{Binding IsStrRef, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                                                 </Grid>
                                                             </Grid>
                                                         </DataTemplate>

@@ -5,6 +5,7 @@ using LE1GalaxyMapEditor.Views;
 using LE1GalaxyMapEditor.Workflows.Ports;
 using LE1GalaxyMapEditor.Workflows.Queries;
 using Microsoft.Win32;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.Presentation;
 
@@ -13,8 +14,19 @@ public sealed class WpfEditorDialogs(
     Func<string, bool>? confirmAction = null,
     Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null,
     Func<CommitPreview, bool>? commitReviewAction = null,
-    Func<ClusterLabelRequest, string?>? clusterLabelSelector = null) : IEditorDialogs
+    Func<ClusterLabelRequest, string?>? clusterLabelSelector = null,
+    GalaxyMapTlkService? tlkService = null,
+    Func<GalaxyMapModule?>? activeModuleProvider = null) : IEditorDialogs
 {
+    public MELocalization? ConfigureBaseGameLocale(MELocalization currentLocale)
+    {
+        var dialog = new BaseGameSettingsWindow(currentLocale)
+        {
+            Owner = Application.Current?.MainWindow
+        };
+        return dialog.ShowDialog() == true ? dialog.SelectedLocale : null;
+    }
+
     public ModuleSetupResult? ConfigureModule(ModuleSetupDialogRequest request)
     {
         var dialog = new ModuleSetupWindow(
@@ -29,7 +41,11 @@ public sealed class WpfEditorDialogs(
             request.CanSetActive,
             request.IsActive,
             request.SetActiveAction,
-            request.UnlinkAction)
+            request.UnlinkAction,
+            request.IdentityReadOnly,
+            request.SuggestedTlkLocale,
+            request.SuggestedResourcePackages,
+            request.ForgetAction)
         {
             Owner = Application.Current?.MainWindow
         };
@@ -39,12 +55,28 @@ public sealed class WpfEditorDialogs(
 
     public string? PickModuleFolder()
     {
-        var dialog = new OpenFolderDialog
+        var dialog = new OpenFileDialog
         {
-            Title = "Open or mount a galaxy-map module folder",
-            Multiselect = false
+            Title = "Open a galaxy-map PCC",
+            Filter = "LE1 package files (*.pcc)|*.pcc|All files (*.*)|*.*",
+            Multiselect = false,
+            CheckFileExists = true
         };
-        return dialog.ShowDialog() == true ? dialog.FolderName : null;
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    public string? PickNewModulePackage()
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Create galaxy-map PCC in a DLC CookedPCConsole folder",
+            Filter = "LE1 package files (*.pcc)|*.pcc",
+            DefaultExt = ".pcc",
+            AddExtension = true,
+            OverwritePrompt = true,
+            FileName = "GXM_GalaxyMap.pcc"
+        };
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 
     public PlanetCreationRequest? CreatePlanet()
@@ -61,7 +93,9 @@ public sealed class WpfEditorDialogs(
                 null);
         }
 
-        var dialog = new PlanetCreationWindow { Owner = owner };
+        var dialog = new PlanetCreationWindow(
+            tlkService,
+            activeModuleProvider?.Invoke()?.TlkLocale ?? MELocalization.INT) { Owner = owner };
         return dialog.ShowDialog() == true ? dialog.Result : null;
     }
 
@@ -148,7 +182,9 @@ public sealed class WpfEditorDialogs(
             defaults.StartPoint,
             defaults.EventName,
             defaults.ButtonLabel,
-            defaults.CanAddPlotPlanet)
+            defaults.CanAddPlotPlanet,
+            tlkService,
+            activeModuleProvider?.Invoke()?.TlkLocale ?? MELocalization.INT)
         {
             Owner = Application.Current?.MainWindow
         };

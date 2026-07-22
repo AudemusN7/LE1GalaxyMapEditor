@@ -10,6 +10,7 @@ namespace LE1GalaxyMapEditor.Services;
 public sealed class CsvGalaxyMapLoader
 {
     public const string BuiltInSourceName = "Built-in LE1 galaxy map (read-only)";
+    public const string BuiltInResourcePrefix = "LE1GalaxyMapEditor.Resources.Data.";
 
     private static readonly string[] TableNames = ["Cluster", "System", "Planet", "PlotPlanet", "Map", "Relay"];
     private static readonly object CanonicalSchemasGate = new();
@@ -88,6 +89,21 @@ public sealed class CsvGalaxyMapLoader
         }
 
         return LoadLayerSources(sources, module, requireCanonicalHeaders: true);
+    }
+
+    internal GalaxyMapLayer LoadProjectedTables(
+        IReadOnlyDictionary<GalaxyMapTable, GalaxyMapTextTableData> tables,
+        GalaxyMapModule module)
+    {
+        ArgumentNullException.ThrowIfNull(tables);
+        ArgumentNullException.ThrowIfNull(module);
+        var sources = tables.ToDictionary(
+            pair => pair.Key.ToString(),
+            pair => new CsvTableSource(
+                pair.Value.DisplayName,
+                () => new MemoryStream(pair.Value.Utf8Csv, writable: false)),
+            StringComparer.OrdinalIgnoreCase);
+        return LoadLayerSources(sources, module, requireCanonicalHeaders: false);
     }
 
     public static CsvTableSchema GetCanonicalSchema(GalaxyMapTable table)
@@ -194,15 +210,20 @@ public sealed class CsvGalaxyMapLoader
             tableName =>
             {
                 var fileName = $"GalaxyMap_{tableName}.csv";
-                var path = ApplicationResourcePaths.GetDataFilePath(fileName);
-                if (!File.Exists(path))
+                var resourceName = BuiltInResourcePrefix + fileName;
+                var assembly = typeof(CsvGalaxyMapLoader).Assembly;
+                if (assembly.GetManifestResourceInfo(resourceName) is null)
                 {
                     throw new GalaxyMapLoadException(
-                        $"The required built-in {tableName} CSV is missing at '{path}'. " +
-                        "Restore the application's resources\\data folder or reinstall the editor.");
+                        $"The required built-in {tableName} CSV resource '{resourceName}' is missing. " +
+                        "Reinstall the editor.");
                 }
 
-                return CsvTableSource.FromFile(path, displayFullPath: true);
+                return new CsvTableSource(
+                    $"embedded:{fileName}",
+                    () => assembly.GetManifestResourceStream(resourceName)
+                          ?? throw new GalaxyMapLoadException(
+                              $"The built-in CSV resource '{resourceName}' could not be opened."));
             });
     }
 
@@ -439,7 +460,10 @@ public sealed class CsvGalaxyMapLoader
                 var headers = parser.ReadFields()
                     ?? throw new GalaxyMapLoadException(
                         $"The built-in {table} CSV at '{source.DisplayName}' is empty.");
-                schemas[table] = new CsvTableSchema(table, headers);
+                schemas[table] = new CsvTableSchema(
+                    table,
+                    headers,
+                    GalaxyMapPccSchema.DefaultCellTypes(table, headers));
             }
             catch (GalaxyMapLoadException)
             {
@@ -715,3 +739,5 @@ public sealed class CsvGalaxyMapLoader
             => new($"{System.IO.Path.GetFileName(Path)}, CSV row {CsvLine}, field '{fieldName}' expected a {expected} but found '{value}'.");
     }
 }
+
+internal sealed record GalaxyMapTextTableData(string DisplayName, byte[] Utf8Csv);

@@ -442,16 +442,17 @@ internal static class PhaseOneLifecycleTests
 
     private static void CopyReferenceCsvFiles(string destination)
     {
-        var source = Path.Combine(AppContext.BaseDirectory, "resources", "data");
-        if (!Directory.Exists(source))
-        {
-            throw new DirectoryNotFoundException($"Test CSV resource directory was not deployed: {source}");
-        }
-
         Directory.CreateDirectory(destination);
-        foreach (var file in Directory.EnumerateFiles(source, "*.csv"))
+        var assembly = typeof(CsvGalaxyMapLoader).Assembly;
+        foreach (var resourceName in assembly.GetManifestResourceNames().Where(name =>
+                     name.StartsWith(CsvGalaxyMapLoader.BuiltInResourcePrefix, StringComparison.Ordinal) &&
+                     name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)))
         {
-            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
+            var fileName = resourceName[CsvGalaxyMapLoader.BuiltInResourcePrefix.Length..];
+            using var source = assembly.GetManifestResourceStream(resourceName)
+                ?? throw new InvalidOperationException($"Embedded test CSV could not be opened: {resourceName}");
+            using var output = File.Create(Path.Combine(destination, fileName));
+            source.CopyTo(output);
         }
     }
 

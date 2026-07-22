@@ -14,55 +14,43 @@ namespace LE1GalaxyMapEditor.Services;
 /// </summary>
 public sealed partial class GalaxyMapTextureService
 {
-    public const string GalaxyAssetName = "galaxy.jpg";
-    public const string SystemAssetName = "stars01.png";
+    public const string GalaxyTextureReference = "BIOA_GalaxyMap_T.galaxy";
+    public const string SystemTextureReference = "BIOA_GalaxyMap_T.stars01";
     private const int MaximumCachedTextures = 6;
 
-    private readonly Func<string, Stream?> _openTextureStream;
     private readonly Action<string, TimeSpan>? _decodeObserver;
     private readonly Dictionary<string, CacheEntry> _cache =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly LinkedList<string> _leastRecentlyUsed = [];
     private readonly object _cacheLock = new();
+    private readonly PccGalaxyMapTextureService _packageTextures = new();
+    private readonly Dictionary<string, PackageTextureData> _packageDataCache =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public GalaxyMapTextureService()
-        : this(CreateDirectoryStreamFactory(ApplicationResourcePaths.TextureDirectory), null)
     {
     }
 
     internal GalaxyMapTextureService(Action<string, TimeSpan> decodeObserver)
-        : this(
-            CreateDirectoryStreamFactory(ApplicationResourcePaths.TextureDirectory),
-            decodeObserver ?? throw new ArgumentNullException(nameof(decodeObserver)))
     {
+        _decodeObserver = decodeObserver ?? throw new ArgumentNullException(nameof(decodeObserver));
     }
 
     /// <summary>
-    /// Creates a loader backed by a texture directory. The default application
-    /// instance points this at the deployable resources\textures folder.
+    /// Retained for source compatibility with legacy callers. Vanilla textures
+    /// are package-backed; the directory is no longer used for map assets.
     /// </summary>
     public GalaxyMapTextureService(string textureDirectory)
-        : this(CreateDirectoryStreamFactory(textureDirectory), null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(textureDirectory);
     }
 
-    private GalaxyMapTextureService(
-        Func<string, Stream?> openTextureStream,
-        Action<string, TimeSpan>? decodeObserver)
-    {
-        _openTextureStream = openTextureStream;
-        _decodeObserver = decodeObserver;
-    }
+    public BitmapSource? GetGalaxyTexture() => GetPackageTexture([], GalaxyTextureReference);
 
-    public BitmapSource? GetGalaxyTexture() => LoadTexture(GalaxyAssetName);
-
-    public BitmapSource? GetSystemTexture() => LoadTexture(SystemAssetName);
+    public BitmapSource? GetSystemTexture() => GetPackageTexture([], SystemTextureReference);
 
     public BitmapSource? GetClusterTexture(string? backgroundReference)
-    {
-        var assetName = ResolveClusterAssetName(backgroundReference);
-        return assetName is null ? null : LoadTexture(assetName);
-    }
+        => GetPackageTexture([], backgroundReference);
 
     public BitmapSource? GetModuleClusterTexture(GalaxyMapModule module, int clusterRowId)
     {
@@ -76,6 +64,143 @@ public sealed partial class GalaxyMapTextureService
         var fullPath = ResolveModuleTexturePath(module, relativePath);
         return fullPath is null ? null : LoadFileTexture(fullPath);
     }
+
+    public BitmapSource? GetPackageTexture(GalaxyMapModule module, string? inMemoryReference)
+        => GetPackageTexture([module], inMemoryReference);
+
+    public BitmapSource? GetPackageTexture(
+        IEnumerable<GalaxyMapModule> modules,
+        string? inMemoryReference)
+    {
+        var moduleList = modules.ToArray();
+        var resolved = _packageTextures.Resolve(moduleList, inMemoryReference);
+        if (resolved is null)
+        {
+            return null;
+        }
+        var cacheKey = PackageCacheKey(resolved);
+        return LoadCached(cacheKey, () =>
+        {
+            var png = _packageTextures.DecodePng(resolved);
+            return png is null ? null : new MemoryStream(png, writable: false);
+        });
+    }
+
+    public PackageTextureData? GetPackageTextureData(
+        IEnumerable<GalaxyMapModule> modules,
+        string? inMemoryReference)
+    {
+        if (string.IsNullOrWhiteSpace(inMemoryReference))
+        {
+            return null;
+        }
+        return GetPackageTextureData(modules, [inMemoryReference])
+            .GetValueOrDefault(inMemoryReference);
+    }
+
+    public IReadOnlyDictionary<string, PackageTextureData> GetPackageTextureData(
+        IEnumerable<GalaxyMapModule> modules,
+        IEnumerable<string> inMemoryReferences)
+    {
+        ArgumentNullException.ThrowIfNull(modules);
+        ArgumentNullException.ThrowIfNull(inMemoryReferences);
+        var moduleList = modules.ToArray();
+        var references = inMemoryReferences
+            .Where(reference => !string.IsNullOrWhiteSpace(reference))
+            .Select(reference => reference.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var resolvedByReference = references
+            .Select(reference => (Reference: reference, Texture: _packageTextures.Resolve(moduleList, reference)))
+            .Where(item => item.Texture is not null)
+            .ToDictionary(
+                item => item.Reference,
+                item => item.Texture!,
+                StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, PackageTextureData>(StringComparer.OrdinalIgnoreCase);
+        var missing = new List<PackageTextureReference>();
+        foreach (var (reference, texture) in resolvedByReference)
+        {
+            var cacheKey = PackageCacheKey(texture);
+            lock (_cacheLock)
+            {
+                if (_packageDataCache.TryGetValue(cacheKey, out var cached))
+                {
+                    result[reference] = cached;
+                    continue;
+                }
+            }
+            missing.Add(texture);
+        }
+
+        var decoded = _packageTextures.DecodePng(missing);
+        foreach (var texture in missing.Distinct())
+        {
+            if (!decoded.TryGetValue(texture, out var contents))
+            {
+                continue;
+            }
+            var cacheKey = PackageCacheKey(texture);
+            var data = new PackageTextureData(cacheKey, contents);
+            lock (_cacheLock)
+            {
+                if (_packageDataCache.Count >= 32)
+                {
+                    _packageDataCache.Clear();
+                }
+                _packageDataCache[cacheKey] = data;
+            }
+        }
+
+        foreach (var (reference, texture) in resolvedByReference)
+        {
+            var cacheKey = PackageCacheKey(texture);
+            lock (_cacheLock)
+            {
+                if (_packageDataCache.TryGetValue(cacheKey, out var data))
+                {
+                    result[reference] = data;
+                }
+            }
+        }
+        return result;
+    }
+
+    public IReadOnlyList<PackageTextureReference> GetPackageTextureOptions(GalaxyMapModule module)
+        => _packageTextures.Enumerate(module);
+
+    public IReadOnlyList<PackageTextureReference> GetPackageTextureOptions(IEnumerable<GalaxyMapModule> modules)
+        => _packageTextures.Enumerate(modules);
+
+    public IReadOnlyList<PackageTextureReference> GetPlanetPackageTextureOptions(
+        IEnumerable<GalaxyMapModule> modules,
+        IEnumerable<string> referencedPlanetTextures)
+    {
+        ArgumentNullException.ThrowIfNull(modules);
+        ArgumentNullException.ThrowIfNull(referencedPlanetTextures);
+        var moduleList = modules.ToArray();
+        var referencedPaths = referencedPlanetTextures
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var customResourcePackages = moduleList
+            .Where(module => !module.IsBaseGame)
+            .SelectMany(module => module.ResourcePackagePaths)
+            .Select(Path.GetFullPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return _packageTextures.Enumerate(moduleList)
+            .Where(texture => PlanetAppearanceSchema.IsSelectablePlanetTextureObject(
+                texture.BaseObjectName,
+                customResourcePackages.Contains(texture.PackagePath),
+                referencedPaths.Contains(texture.InMemoryPath)))
+            .ToArray();
+    }
+
+    public IReadOnlyList<string> PackageTextureDiagnostics => _packageTextures.Diagnostics;
+
+    private static string PackageCacheKey(PackageTextureReference texture)
+        => $"pcc:{texture.PackagePath}:{texture.ExportUIndex}:{texture.Fingerprint.Sha256}";
 
     public BitmapSource? LoadTextureBytes(string cacheKey, byte[] contents)
     {
@@ -133,9 +258,6 @@ public sealed partial class GalaxyMapTextureService
 
         return $"Cluster{number:00}.jpg";
     }
-
-    private BitmapSource? LoadTexture(string assetName)
-        => LoadCached($"asset:{assetName}", () => _openTextureStream(assetName));
 
     private BitmapSource? LoadFileTexture(string fullPath)
     {
@@ -235,23 +357,6 @@ public sealed partial class GalaxyMapTextureService
         return true;
     }
 
-    private static Func<string, Stream?> CreateDirectoryStreamFactory(string textureDirectory)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(textureDirectory);
-        var root = Path.GetFullPath(textureDirectory);
-        return assetName =>
-        {
-            if (Path.IsPathRooted(assetName) ||
-                !string.Equals(Path.GetFileName(assetName), assetName, StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            var path = Path.Combine(root, assetName);
-            return File.Exists(path) ? OpenSharedRead(path) : null;
-        };
-    }
-
     private static FileStream OpenSharedRead(string path)
         => new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
@@ -260,3 +365,5 @@ public sealed partial class GalaxyMapTextureService
     [GeneratedRegex("^Cluster([0-9]+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ClusterAssetPattern();
 }
+
+public sealed record PackageTextureData(string CacheKey, byte[] Contents);

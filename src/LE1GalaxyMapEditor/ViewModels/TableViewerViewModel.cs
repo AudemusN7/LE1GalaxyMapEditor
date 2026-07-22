@@ -1,9 +1,13 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
+using System.IO;
+using System.Text;
 using LE1GalaxyMapEditor.Infrastructure;
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Services;
 using LE1GalaxyMapEditor.Workflows;
 using LE1GalaxyMapEditor.Workflows.Queries;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.ViewModels;
 
@@ -22,6 +26,8 @@ public sealed class TableViewerViewModel : ObservableObject
     private readonly TableProjectionService _projection;
     private readonly Func<GalaxyMapRowKey, string, string, WorkflowResult> _applyEdit;
     private readonly Func<bool> _canEdit;
+    private readonly GalaxyMapTlkService? _tlk;
+    private readonly Func<GalaxyMapModule, MELocalization> _localeForModule;
     private IReadOnlyList<TableColumn> _columns = [];
     private GalaxyMapTable _selectedTable = GalaxyMapTable.Cluster;
     private bool _needsRefresh = true;
@@ -31,11 +37,15 @@ public sealed class TableViewerViewModel : ObservableObject
     public TableViewerViewModel(
         TableProjectionService projection,
         Func<GalaxyMapRowKey, string, string, WorkflowResult> applyEdit,
-        Func<bool> canEdit)
+        Func<bool> canEdit,
+        GalaxyMapTlkService? tlk = null,
+        Func<GalaxyMapModule, MELocalization>? localeForModule = null)
     {
         _projection = projection ?? throw new ArgumentNullException(nameof(projection));
         _applyEdit = applyEdit ?? throw new ArgumentNullException(nameof(applyEdit));
         _canEdit = canEdit ?? throw new ArgumentNullException(nameof(canEdit));
+        _tlk = tlk;
+        _localeForModule = localeForModule ?? (module => module.TlkLocale);
         Tabs = new ObservableCollection<TableTabViewModel>(TabOrder.Select(table =>
             new TableTabViewModel(table, () => SelectedTable = table)));
         UpdateTabSelection();
@@ -169,7 +179,7 @@ public sealed class TableViewerViewModel : ObservableObject
         cell.SetValidationError(null);
     }
 
-    private static TableRowViewModel ProjectRow(MergedTableRow row, IReadOnlyList<TableColumn> columns)
+    private TableRowViewModel ProjectRow(MergedTableRow row, IReadOnlyList<TableColumn> columns)
         => new(
             row.Key,
             columns.Select(column =>
@@ -181,8 +191,25 @@ public sealed class TableViewerViewModel : ObservableObject
                     cell.EffectiveModuleColor,
                     cell.IsStaged,
                     cell.DiffersFromLowerInstance,
-                    cell.OverrideChain.Count);
+                    cell.OverrideChain.Count,
+                    ResolveTlkToolTip(column, cell, cell.EffectiveModule));
             }).ToArray());
+
+    private string? ResolveTlkToolTip(TableColumn column, MergedTableCell cell, GalaxyMapModule module)
+    {
+        if (_tlk is null || !GalaxyMapStrRefSchema.IsStrRef(SelectedTable, column.Name) ||
+            !int.TryParse(cell.DisplayValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var stringRef) ||
+            stringRef < 0)
+        {
+            return null;
+        }
+
+        var locale = _localeForModule(module);
+        var lookup = _tlk.Find(locale, stringRef);
+        return lookup is null
+            ? $"No {locale} TLK string was found for StrRef {stringRef}."
+            : $"Effective value supplied by {Path.GetFileName(lookup.SourcePackage)}.\n\n{lookup.Text}";
+    }
 
     private void UpdateTabSelection()
     {
@@ -237,7 +264,8 @@ public sealed class TableCellViewModel : ObservableObject
         ModuleColor effectiveModuleColor,
         bool isStaged,
         bool differsFromLowerInstance,
-        int overrideCount)
+        int overrideCount,
+        string? tlkToolTipText = null)
     {
         DisplayValue = displayValue;
         _editValue = displayValue;
@@ -246,6 +274,7 @@ public sealed class TableCellViewModel : ObservableObject
         IsStaged = isStaged;
         DiffersFromLowerInstance = differsFromLowerInstance;
         OverrideCount = overrideCount;
+        TlkToolTipText = tlkToolTipText;
     }
 
     public string DisplayValue { get; }
@@ -260,6 +289,7 @@ public sealed class TableCellViewModel : ObservableObject
     public bool IsStaged { get; }
     public bool DiffersFromLowerInstance { get; }
     public int OverrideCount { get; }
+    public string? TlkToolTipText { get; }
     public bool HasError => !string.IsNullOrWhiteSpace(ValidationError);
     public string? ValidationError
     {
@@ -280,7 +310,7 @@ public sealed class TableCellViewModel : ObservableObject
         {
             if (ValidationError is { Length: > 0 })
             {
-                return ValidationError;
+                return WrapToolTip(ValidationError);
             }
 
             var provenance = $"Effective value supplied by {EffectiveModuleTag}.";
@@ -291,8 +321,41 @@ public sealed class TableCellViewModel : ObservableObject
                 ? " This value differs from the next lower instance."
                 : string.Empty;
             var staged = IsStaged ? " This cell has an uncommitted change." : string.Empty;
-            return provenance + overrides + comparison + staged;
+            var cellContext = provenance + overrides + comparison + staged;
+            var toolTip = string.IsNullOrWhiteSpace(TlkToolTipText)
+                ? cellContext
+                : TlkToolTipText;
+            return WrapToolTip(toolTip);
         }
+    }
+
+    private static string WrapToolTip(string text, int maximumLineLength = 60)
+    {
+        var result = new StringBuilder(text.Length + 16);
+        var logicalLines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        for (var lineIndex = 0; lineIndex < logicalLines.Length; lineIndex++)
+        {
+            var remaining = logicalLines[lineIndex].TrimEnd();
+            while (remaining.Length > maximumLineLength)
+            {
+                var breakAt = remaining.LastIndexOf(' ', maximumLineLength);
+                if (breakAt <= 0)
+                {
+                    breakAt = maximumLineLength;
+                }
+
+                result.Append(remaining[..breakAt].TrimEnd()).Append('\n');
+                remaining = remaining[breakAt..].TrimStart();
+            }
+
+            result.Append(remaining);
+            if (lineIndex < logicalLines.Length - 1)
+            {
+                result.Append('\n');
+            }
+        }
+
+        return result.ToString();
     }
 
     internal void SetValidationError(string? error) => ValidationError = error;

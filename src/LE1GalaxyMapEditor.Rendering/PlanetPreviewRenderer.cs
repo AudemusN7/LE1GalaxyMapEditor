@@ -188,7 +188,10 @@ public sealed class PlanetPreviewRenderer : IDisposable
             DepthComparison = Comparison.Always,
             IsStencilEnabled = false
         });
-        _coronaGradient = LoadTexture("GXM_CoronaGradient.png", useSrgb: true);
+        _coronaGradient = LoadResolvedTexture(
+            "BIOA_GXM10_T.GXM_CoronaGradient",
+            "GXM_CoronaGradient.png",
+            useSrgb: true);
         // Hardware sRGB decoding puts the background into the same linear scene
         // space as the mesh shaders before the full-screen postprocess.
         _starsBackground = LoadTexture("stars_bg.jpg", useSrgb: true);
@@ -398,13 +401,13 @@ public sealed class PlanetPreviewRenderer : IDisposable
         PreviewLightingSettings lighting,
         byte[]? destination)
     {
-        var normal = LoadMaterialTexture(material.NormalMap, "GXM_PlanetNormal01", useSrgb: false);
-        var city = LoadMaterialTexture(material.CityEmissive, "GXM_ContinentMask02", useSrgb: true);
-        var continentMask1 = LoadMaterialTexture(material.ContinentMask01, "GXM_ContinentMask01", useSrgb: true);
-        var continentMask2 = LoadMaterialTexture(material.ContinentMask02, "GXM_DiffuseMask01", useSrgb: true);
-        var continentTexture = LoadMaterialTexture(material.ContinentTexture, "GXM_DiffuseMask01", useSrgb: true);
-        var oceanTexture = LoadMaterialTexture(material.OceanTexture, "GXM_DiffuseMask01", useSrgb: true);
-        var atmosphere = LoadMaterialTexture(material.AtmosphereMaster, "GXM_Atmosphere01", useSrgb: true);
+        var normal = LoadMaterialTexture(material.NormalMap, "BIOA_GXM10_T.GXM_PlanetNormal01", useSrgb: false);
+        var city = LoadMaterialTexture(material.CityEmissive, "BIOA_GXM10_T.GXM_ContinentMask02", useSrgb: true);
+        var continentMask1 = LoadMaterialTexture(material.ContinentMask01, "BIOA_GXM10_T.GXM_ContinentMask01", useSrgb: true);
+        var continentMask2 = LoadMaterialTexture(material.ContinentMask02, "BIOA_GXM10_T.GXM_DiffuseMask01", useSrgb: true);
+        var continentTexture = LoadMaterialTexture(material.ContinentTexture, "BIOA_GXM10_T.GXM_DiffuseMask01", useSrgb: true);
+        var oceanTexture = LoadMaterialTexture(material.OceanTexture, "BIOA_GXM10_T.GXM_DiffuseMask01", useSrgb: true);
+        var atmosphere = LoadMaterialTexture(material.AtmosphereMaster, "BIOA_GXM10_T.GXM_Atmosphere01", useSrgb: true);
         var textures = new[]
         {
             normal.View,
@@ -546,6 +549,10 @@ public sealed class PlanetPreviewRenderer : IDisposable
         PlanetRenderMaterial material,
         PreviewTransformSettings transforms)
     {
+        _coronaGradient = LoadResolvedTexture(
+            "BIOA_GXM10_T.GXM_CoronaGradient",
+            "GXM_CoronaGradient.png",
+            useSrgb: true);
         var previewOriginUe = new Vector3(-5406.77295f, 13571.8086f, -40187.1992f);
         var coronaLocationUe = new Vector3(
             transforms.Corona.X,
@@ -674,6 +681,12 @@ public sealed class PlanetPreviewRenderer : IDisposable
             return LoadTextureBytes($"custom:{custom.CacheKey}", custom.Contents, useSrgb);
         }
 
+        if (_materialTextureResolver?.Invoke(fallback) is { } fallbackSource)
+        {
+            _missingTextures.Add(name);
+            return LoadTextureBytes($"custom:{fallbackSource.CacheKey}", fallbackSource.Contents, useSrgb);
+        }
+
         var normalized = string.IsNullOrWhiteSpace(name) ? fallback : name;
         var dot = normalized.LastIndexOf('.');
         if (dot >= 0)
@@ -690,7 +703,24 @@ public sealed class PlanetPreviewRenderer : IDisposable
             _missingTextures.Add(name);
             normalized = fallback + ".png";
         }
+        if (!File.Exists(Path.Combine(_resourceRoot, "Textures", normalized)))
+        {
+            normalized = "stars_bg.jpg";
+        }
         return LoadTexture(normalized, useSrgb);
+    }
+
+    private TextureResource LoadResolvedTexture(string reference, string fallbackFileName, bool useSrgb)
+    {
+        if (_materialTextureResolver?.Invoke(reference) is { } source)
+        {
+            return LoadTextureBytes($"custom:{source.CacheKey}", source.Contents, useSrgb);
+        }
+        return LoadTexture(
+            File.Exists(Path.Combine(_resourceRoot, "Textures", fallbackFileName))
+                ? fallbackFileName
+                : "stars_bg.jpg",
+            useSrgb);
     }
 
     private TextureResource LoadTexture(string fileName, bool useSrgb)

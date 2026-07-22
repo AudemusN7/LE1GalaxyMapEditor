@@ -2,12 +2,21 @@ using System.Globalization;
 using System.Windows;
 using LE1GalaxyMapEditor.Infrastructure;
 using LE1GalaxyMapEditor.Workflows.Ports;
+using LE1GalaxyMapEditor.Services;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.Views;
 
 public partial class LandableDestinationWindow : Window
 {
-    public LandableDestinationWindow(string mapName, string startPoint, string eventName, int? buttonLabel, bool canAddPlotPlanet)
+    public LandableDestinationWindow(
+        string mapName,
+        string startPoint,
+        string eventName,
+        int? buttonLabel,
+        bool canAddPlotPlanet,
+        GalaxyMapTlkService? tlkService = null,
+        MELocalization locale = MELocalization.INT)
     {
         InitializeComponent();
         DarkTitleBar.Apply(this);
@@ -15,6 +24,8 @@ public partial class LandableDestinationWindow : Window
         StartPointBox.Text = startPoint;
         EventBox.Text = string.IsNullOrWhiteSpace(eventName) ? "Land" : eventName;
         ButtonLabelBox.Text = buttonLabel?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+        ButtonLabelLookup.TlkService = tlkService;
+        ButtonLabelLookup.Locale = locale;
         PlotPlanetBox.IsEnabled = canAddPlotPlanet;
         PlotPlanetBox.Visibility = canAddPlotPlanet ? Visibility.Visible : Visibility.Collapsed;
     }

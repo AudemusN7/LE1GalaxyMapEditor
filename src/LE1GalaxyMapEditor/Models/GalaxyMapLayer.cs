@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 
 namespace LE1GalaxyMapEditor.Models;
 
@@ -17,6 +18,8 @@ public sealed class GalaxyMapLayer
     }
 
     public GalaxyMapModule Module { get; private set; }
+    public string? SourcePackagePath { get; private set; }
+    public GalaxyMapPackageFingerprint? SourcePackageFingerprint { get; private set; }
     public ObservableCollection<Cluster> Clusters { get; } = [];
     public ObservableCollection<GalaxySystem> Systems { get; } = [];
     public ObservableCollection<Planet> Planets { get; } = [];
@@ -32,6 +35,14 @@ public sealed class GalaxyMapLayer
         {
             row.Origin = new GalaxyMapRowOrigin(module, row.Origin?.OverridesLowerLayer == true);
         }
+    }
+
+    public void SetPackageSource(string packagePath, GalaxyMapPackageFingerprint fingerprint)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
+        ArgumentNullException.ThrowIfNull(fingerprint);
+        SourcePackagePath = Path.GetFullPath(packagePath);
+        SourcePackageFingerprint = fingerprint;
     }
 
     public IReadOnlyDictionary<GalaxyMapTable, CsvTableSchema> Schemas => _schemas;

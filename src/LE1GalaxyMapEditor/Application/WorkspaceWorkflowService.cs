@@ -3,6 +3,7 @@ using System.Text;
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Services;
 using LE1GalaxyMapEditor.Workflows.Editing;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.Workflows;
 
@@ -22,6 +23,11 @@ public sealed class WorkspaceWorkflowService
     private readonly CsvGalaxyMapLoader _loader;
     private readonly GalaxyMapModuleManifestStore _manifestStore;
     private readonly GalaxyMapWorkspaceStore _workspaceStore;
+    private readonly GalaxyMapProfileWorkspaceStore? _profileWorkspaceStore;
+    private readonly GalaxyMapModuleProfileStore _profileStore;
+    private readonly DlcModuleDiscoveryService _moduleDiscovery;
+    private readonly PccGalaxyMapLoader _pccLoader;
+    private readonly GalaxyMapTemplatePackageService _templatePackages;
     private readonly List<ValidationDiagnostic> _startupDiagnostics = [];
     private readonly List<RememberedModule> _missingRememberedModules = [];
     private bool _isRestoring;
@@ -31,13 +37,23 @@ public sealed class WorkspaceWorkflowService
         EditSessionService edits,
         CsvGalaxyMapLoader loader,
         GalaxyMapModuleManifestStore? manifestStore = null,
-        GalaxyMapWorkspaceStore? workspaceStore = null)
+        GalaxyMapWorkspaceStore? workspaceStore = null,
+        GalaxyMapProfileWorkspaceStore? profileWorkspaceStore = null,
+        GalaxyMapModuleProfileStore? profileStore = null,
+        DlcModuleDiscoveryService? moduleDiscovery = null,
+        PccGalaxyMapLoader? pccLoader = null,
+        GalaxyMapTemplatePackageService? templatePackages = null)
     {
         _session = session;
         _edits = edits;
         _loader = loader;
         _manifestStore = manifestStore ?? new GalaxyMapModuleManifestStore();
         _workspaceStore = workspaceStore ?? new GalaxyMapWorkspaceStore();
+        _profileWorkspaceStore = profileWorkspaceStore;
+        _profileStore = profileStore ?? new GalaxyMapModuleProfileStore();
+        _moduleDiscovery = moduleDiscovery ?? new DlcModuleDiscoveryService(_profileStore);
+        _pccLoader = pccLoader ?? new PccGalaxyMapLoader(loader);
+        _templatePackages = templatePackages ?? new GalaxyMapTemplatePackageService();
     }
 
     public IReadOnlyList<ValidationDiagnostic> StartupDiagnostics => _startupDiagnostics;
@@ -107,14 +123,27 @@ public sealed class WorkspaceWorkflowService
         try
         {
             BeginRestoration();
-            var remembered = _workspaceStore.Load();
-            var loadedLayers = LoadRememberedLayers(
-                [baseLayer.Module.Tag],
-                remembered,
-                diagnostics,
-                missingModules);
-            candidate = new GalaxyMapWorkspace(baseLayer, loadedLayers);
-            RestoreActiveModule(candidate, remembered.ActiveModuleTag);
+            if (_profileWorkspaceStore is not null)
+            {
+                var remembered = _profileWorkspaceStore.Load();
+                var loadedLayers = LoadRememberedProfileLayers(
+                    [baseLayer.Module.Tag],
+                    remembered,
+                    diagnostics);
+                candidate = new GalaxyMapWorkspace(baseLayer, loadedLayers);
+                RestoreActiveProfile(candidate, remembered.ActiveProfileId);
+            }
+            else
+            {
+                var remembered = _workspaceStore.Load();
+                var loadedLayers = LoadRememberedLayers(
+                    [baseLayer.Module.Tag],
+                    remembered,
+                    diagnostics,
+                    missingModules);
+                candidate = new GalaxyMapWorkspace(baseLayer, loadedLayers);
+                RestoreActiveModule(candidate, remembered.ActiveModuleTag);
+            }
 
             if (transactionalReload && requireCurrentlyMountedModules &&
                 MissingCurrentlyMountedModules(candidate) is { Count: > 0 } missingCurrent)
@@ -254,6 +283,67 @@ public sealed class WorkspaceWorkflowService
         }
     }
 
+    public WorkflowResult CreatePccModule(
+        string destinationPackagePath,
+        ModuleColor color,
+        ModuleIdReservations reservations,
+        MELocalization tlkLocale = MELocalization.INT,
+        IReadOnlyList<string>? resourcePackagePaths = null,
+        string? displayName = null)
+    {
+        var workspace = _session.Workspace;
+        if (workspace is null)
+        {
+            return WorkflowResult.Failure("Load BASEGAME before creating an authoring module.");
+        }
+        if (_profileWorkspaceStore is null)
+        {
+            return WorkflowResult.Failure("PCC module creation is unavailable in the legacy workspace mode.");
+        }
+
+        var createdPackage = false;
+        try
+        {
+            ValidateNewModuleRanges(reservations);
+            var packagePath = Path.GetFullPath(destinationPackagePath);
+            _templatePackages.Create(packagePath);
+            createdPackage = true;
+            var discovered = _moduleDiscovery.Discover(packagePath);
+            EnsureUniqueTag(discovered.Module.Tag);
+            var initialProfile = discovered.Profile with
+            {
+                ModuleColor = color,
+                Reservations = reservations,
+                DisplayName = string.IsNullOrWhiteSpace(displayName)
+                    ? discovered.Module.Name
+                    : displayName.Trim()
+            };
+            var module = initialProfile.ToModule(discovered.Module.Name, discovered.Module.LoadOrder);
+            module = module.With(
+                tlkLocale: tlkLocale,
+                resourcePackagePaths: ValidateResourcePackages(module, resourcePackagePaths ?? []));
+            var profile = GalaxyMapModuleProfile.FromModule(module);
+            var layer = _pccLoader.Load(packagePath, module);
+            _profileStore.Save(profile);
+            workspace.Mount(layer);
+            workspace.SetActiveModule(module);
+            _edits.StageWorkspaceModuleAdded(module);
+            _session.Publish(ChangeImpact.StructuralAll);
+            return WorkflowResult.Success(
+                $"Created {module.Name} [{module.Tag}] galaxy-map PCC. Changes remain staged until Commit.",
+                navigation: NavigationTarget.Galaxy,
+                impact: ChangeImpact.StructuralAll);
+        }
+        catch (Exception exception) when (IsExpectedOperationFailure(exception))
+        {
+            if (createdPackage && File.Exists(destinationPackagePath))
+            {
+                File.Delete(destinationPackagePath);
+            }
+            return WorkflowResult.Failure(exception.Message);
+        }
+    }
+
     public WorkflowResult OpenExistingModule(string folderPath)
     {
         var workspace = _session.Workspace;
@@ -264,6 +354,38 @@ public sealed class WorkspaceWorkflowService
 
         try
         {
+            if (_profileWorkspaceStore is not null)
+            {
+                var discovered = _moduleDiscovery.Discover(folderPath);
+                EnsureUniqueTag(discovered.Module.Tag);
+                var pccLayer = _pccLoader.Load(folderPath, discovered.Module);
+                var profile = discovered.Profile;
+                var pccModule = discovered.Module;
+                var inferred = InferReservations(pccLayer, workspace);
+                var mergedReservations = new ModuleIdReservations(
+                    profile.Reservations.Cluster ?? inferred.Cluster,
+                    profile.Reservations.System ?? inferred.System,
+                    profile.Reservations.Planet ?? inferred.Planet,
+                    profile.Reservations.Map ?? inferred.Map,
+                    profile.Reservations.Relay ?? inferred.Relay);
+                if (mergedReservations != profile.Reservations)
+                {
+                    profile = profile with { Reservations = mergedReservations };
+                    pccModule = profile.ToModule(discovered.Module.Name, discovered.Module.LoadOrder);
+                    pccLayer.ReplaceModule(pccModule);
+                }
+                _profileStore.Save(profile);
+                workspace.Mount(pccLayer);
+                workspace.SetActiveModule(pccModule);
+                _edits.StageWorkspaceModuleAdded(pccModule);
+                _session.Publish(ChangeImpact.StructuralAll);
+                return WorkflowResult.Success(
+                    $"Opened {pccModule.Name} [{pccModule.Tag}] from " +
+                    $"{Path.GetFileName(folderPath)}.",
+                    navigation: NavigationTarget.Galaxy,
+                    impact: ChangeImpact.StructuralAll);
+            }
+
             var module = _manifestStore.Load(folderPath);
             EnsureUniqueTag(module.Tag);
             var layer = _loader.LoadPartFolder(folderPath, module);
@@ -391,6 +513,66 @@ public sealed class WorkspaceWorkflowService
         }
     }
 
+    public WorkflowResult ForgetModule(GalaxyMapModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        var workspace = _session.Workspace;
+        if (_profileWorkspaceStore is null || workspace is null || module.IsBaseGame ||
+            module.ProfileId is null || !module.IsPccBacked ||
+            workspace.ModuleLayers.All(layer => !ReferenceEquals(layer.Module, module)))
+        {
+            return WorkflowResult.Failure("The module is not a mounted PCC-backed profile.");
+        }
+        if (_session.Changes.HasChanges)
+        {
+            return WorkflowResult.Failure("Commit or discard staged changes before forgetting a module.");
+        }
+
+        var layer = workspace.ModuleLayers.Single(candidate => ReferenceEquals(candidate.Module, module));
+        var originalActive = workspace.ActiveModule;
+        try
+        {
+            workspace.Unmount(module);
+            if (ReferenceEquals(originalActive, module))
+            {
+                workspace.SetActiveModule(workspace.Modules
+                    .Where(candidate => !candidate.IsReadOnly)
+                    .OrderByDescending(candidate => candidate.LoadOrder)
+                    .ThenBy(candidate => candidate.Tag, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault());
+            }
+
+            SaveCurrentWorkspace();
+            _profileStore.Delete(module.ProfileId);
+            _edits.ClearHistory();
+            _session.Publish(ChangeImpact.StructuralAll);
+            return WorkflowResult.Success(
+                $"Forgot {module.Name} [{module.Tag}]. Its editor profile was deleted; DLC files were untouched.",
+                navigation: NavigationTarget.Galaxy,
+                impact: ChangeImpact.StructuralAll);
+        }
+        catch (Exception exception) when (IsExpectedOperationFailure(exception))
+        {
+            if (workspace.ModuleLayers.All(candidate => !ReferenceEquals(candidate.Module, module)))
+            {
+                workspace.Mount(layer);
+                if (originalActive is not null)
+                {
+                    workspace.SetActiveModule(originalActive);
+                }
+                try
+                {
+                    SaveCurrentWorkspace();
+                }
+                catch
+                {
+                    // Preserve the original failure; startup diagnostics can recover a stale workspace file.
+                }
+            }
+            return WorkflowResult.Failure($"The module could not be forgotten: {exception.Message}");
+        }
+    }
+
     public WorkflowResult UpdateModuleMetadata(
         GalaxyMapModule module,
         string name,
@@ -398,7 +580,9 @@ public sealed class WorkspaceWorkflowService
         ModuleColor color,
         int loadOrder,
         ModuleIdReservations reservations,
-        HistoryPresentationState presentation)
+        HistoryPresentationState presentation,
+        MELocalization? tlkLocale = null,
+        IReadOnlyList<string>? resourcePackagePaths = null)
     {
         var workspace = _session.Workspace;
         if (workspace is null || module.IsBaseGame)
@@ -410,11 +594,27 @@ public sealed class WorkspaceWorkflowService
         {
             ValidateNewModuleRanges(reservations, module);
             ValidateUpdatedModuleRows(module, reservations);
+            if (module.IsPccBacked &&
+                (!string.Equals(module.Tag, tag, StringComparison.OrdinalIgnoreCase) ||
+                 module.LoadOrder != loadOrder))
+            {
+                return WorkflowResult.Failure(
+                    "DLC tag and mount priority are sourced from AutoLoad.ini and cannot be edited here.");
+            }
             if (!string.Equals(module.Tag, tag, StringComparison.OrdinalIgnoreCase))
             {
                 EnsureUniqueTag(tag);
             }
-            var replacement = module.With(name, tag, color, loadOrder, reservations);
+            var replacement = module.IsPccBacked
+                ? module.With(
+                    name: name,
+                    color: color,
+                    reservations: reservations,
+                    tlkLocale: tlkLocale ?? module.TlkLocale,
+                    resourcePackagePaths: resourcePackagePaths is null
+                        ? module.ResourcePackagePaths
+                        : ValidateResourcePackages(module, resourcePackagePaths))
+                : module.With(name, tag, color, loadOrder, reservations);
             var originalActiveTag = workspace.ActiveModule?.Tag;
             return _edits.ExecuteSessionMutation(new SessionMutationRequest(
                 () =>
@@ -506,6 +706,51 @@ public sealed class WorkspaceWorkflowService
         return loadedLayers;
     }
 
+    private List<GalaxyMapLayer> LoadRememberedProfileLayers(
+        IEnumerable<string> existingModuleTags,
+        ProfileWorkspaceState remembered,
+        List<ValidationDiagnostic> diagnostics)
+    {
+        var loadedLayers = new List<GalaxyMapLayer>();
+        var loadedTags = existingModuleTags.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var profileId in remembered.ProfileIds)
+        {
+            try
+            {
+                var profile = _profileStore.Load(profileId);
+                var packagePath = GalaxyMapModuleProfile.ResolveDlcRelativePath(
+                    profile.LastKnownDlcPath,
+                    profile.GalaxyMapPackage);
+                if (!File.Exists(packagePath))
+                {
+                    diagnostics.Add(new ValidationDiagnostic(
+                        "WORKSPACE-PROFILE-MISSING",
+                        ValidationSeverity.Error,
+                        $"Linked galaxy-map PCC is missing: {packagePath}",
+                        profile.DlcTag));
+                    continue;
+                }
+
+                var discovered = _moduleDiscovery.Discover(packagePath);
+                if (!loadedTags.Add(discovered.Module.Tag))
+                {
+                    throw new InvalidOperationException(
+                        $"A module tagged {discovered.Module.Tag} is already mounted.");
+                }
+                loadedLayers.Add(_pccLoader.Load(packagePath, discovered.Module));
+            }
+            catch (Exception exception) when (IsExpectedOperationFailure(exception))
+            {
+                diagnostics.Add(new ValidationDiagnostic(
+                    "WORKSPACE-PROFILE-LOAD",
+                    ValidationSeverity.Error,
+                    $"Remembered module profile could not be loaded: {exception.Message}",
+                    string.Empty));
+            }
+        }
+        return loadedLayers;
+    }
+
     private List<string> MissingCurrentlyMountedModules(GalaxyMapWorkspace candidate)
     {
         var current = _session.Workspace;
@@ -541,6 +786,17 @@ public sealed class WorkspaceWorkflowService
             ?? workspace.Modules.Where(module => !module.IsReadOnly)
                 .OrderByDescending(module => module.LoadOrder)
                 .FirstOrDefault();
+        if (active is not null)
+        {
+            workspace.SetActiveModule(active);
+        }
+    }
+
+    private static void RestoreActiveProfile(GalaxyMapWorkspace workspace, string? activeProfileId)
+    {
+        var active = workspace.Modules.FirstOrDefault(module =>
+            string.Equals(module.ProfileId, activeProfileId, StringComparison.OrdinalIgnoreCase))
+            ?? workspace.Modules.OrderByDescending(module => module.LoadOrder).FirstOrDefault();
         if (active is not null)
         {
             workspace.SetActiveModule(active);
@@ -583,6 +839,18 @@ public sealed class WorkspaceWorkflowService
         var workspace = _session.Workspace;
         if (workspace is null || _isRestoring)
         {
+            return;
+        }
+
+        if (_profileWorkspaceStore is not null)
+        {
+            var profileIds = workspace.Modules
+                .OrderBy(module => module.LoadOrder)
+                .Select(module => module.ProfileId)
+                .Where(profileId => profileId is not null)
+                .Cast<string>()
+                .ToArray();
+            _profileWorkspaceStore.Save(profileIds, workspace.ActiveModule?.ProfileId);
             return;
         }
 
@@ -634,6 +902,29 @@ public sealed class WorkspaceWorkflowService
             NewRange(GalaxyMapTable.Planet),
             NewRange(GalaxyMapTable.Map),
             NewRange(GalaxyMapTable.Relay));
+    }
+
+    private static ModuleIdReservations InferReservations(
+        GalaxyMapLayer layer,
+        GalaxyMapWorkspace lowerWorkspace)
+    {
+        bool IsNew(GalaxyMapRow row) => lowerWorkspace.Resolve(row.Key) is null;
+
+        static RowIdRange? Range(IEnumerable<GalaxyMapRow> rows)
+        {
+            var rowIds = rows.Select(row => row.RowId).OrderBy(rowId => rowId).ToArray();
+            return rowIds.Length == 0 ? null : new RowIdRange(rowIds[0], rowIds[^1]);
+        }
+
+        return new ModuleIdReservations(
+            Range(layer.Clusters.Where(IsNew)),
+            Range(layer.Systems.Where(IsNew)),
+            Range(layer.Planets.Where(IsNew).Cast<GalaxyMapRow>().Concat(
+                layer.PlotPlanets.Where(row =>
+                    IsNew(row) &&
+                    lowerWorkspace.Resolve(new GalaxyMapRowKey(GalaxyMapTable.Planet, row.RowId)) is null))),
+            Range(layer.Maps.Where(IsNew)),
+            Range(layer.Relays.Where(IsNew)));
     }
 
     public int NextLoadOrder()
@@ -724,6 +1015,54 @@ public sealed class WorkspaceWorkflowService
         {
             throw new InvalidOperationException($"A module tagged {tag} is already mounted.");
         }
+    }
+
+    private static IReadOnlyList<string> ValidateResourcePackages(
+        GalaxyMapModule module,
+        IEnumerable<string> packagePaths)
+    {
+        if (!module.IsPccBacked || module.DlcRootPath is null || module.GalaxyMapPackagePath is null)
+        {
+            throw new InvalidOperationException("Resource PCCs can only be registered for a PCC-backed module.");
+        }
+
+        var result = new List<string>();
+        foreach (var candidate in packagePaths)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            var packagePath = Path.GetFullPath(candidate);
+            if (!string.Equals(Path.GetExtension(packagePath), ".pcc", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Resource package '{packagePath}' is not a PCC file.");
+            }
+            if (!File.Exists(packagePath))
+            {
+                throw new FileNotFoundException("A registered resource PCC does not exist.", packagePath);
+            }
+            if (string.Equals(packagePath, module.GalaxyMapPackagePath, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "The galaxy-map PCC is searched automatically and must not be registered as a resource PCC.");
+            }
+
+            var relativePath = Path.GetRelativePath(module.DlcRootPath, packagePath).Replace('\\', '/');
+            _ = GalaxyMapModuleProfile.ResolveDlcRelativePath(module.DlcRootPath, relativePath);
+            using (var package = MEPackageHandler.OpenLE1Package(packagePath, forceLoadFromDisk: true))
+            {
+                // Opening through the LE1-specific reader validates the package before it is saved to the profile.
+            }
+
+            if (!result.Contains(packagePath, StringComparer.OrdinalIgnoreCase))
+            {
+                result.Add(packagePath);
+            }
+        }
+
+        return result;
     }
 
     private static string SafeFolderName(string name, string fallback)

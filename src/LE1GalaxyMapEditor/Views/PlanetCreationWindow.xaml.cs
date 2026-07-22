@@ -5,6 +5,7 @@ using LE1GalaxyMapEditor.Infrastructure;
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Services;
 using LE1GalaxyMapEditor.Workflows.Ports;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.Views;
 
@@ -24,12 +25,18 @@ public partial class PlanetCreationWindow : Window
         new(PlanetCreationTemplate.AnomalyOrShip, "Anomaly / ship", "Visible anomaly or ship entry, including MSV-style destinations.")
     ];
 
-    public PlanetCreationWindow()
+    public PlanetCreationWindow(
+        GalaxyMapTlkService? tlkService = null,
+        MELocalization locale = MELocalization.INT)
     {
         InitializeComponent();
         DarkTitleBar.Apply(this);
         TemplateBox.ItemsSource = Options;
         TemplateBox.SelectedIndex = 0;
+        NameLookup.TlkService = tlkService;
+        NameLookup.Locale = locale;
+        ButtonLabelLookup.TlkService = tlkService;
+        ButtonLabelLookup.Locale = locale;
     }
 
     public PlanetCreationRequest? Result { get; private set; }

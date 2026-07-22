@@ -29,18 +29,24 @@
                            TextWrapping="Wrap"
                            Text="The module owns every generated _part CSV. BASEGAME and mounted source modules remain read-only." />
             </StackPanel>
-            <Button x:Name="UnlinkButton"
-                    Grid.Column="1"
-                    Content="Unlink Module"
-                    Visibility="Collapsed"
-                    VerticalAlignment="Top"
-                    Margin="18,0,0,0"
-                    Padding="11,5"
-                    Foreground="{StaticResource DangerBrush}"
-                    Background="#351A20"
-                    BorderBrush="#71313D"
-                    Click="UnlinkButton_OnClick"
-                    Style="{StaticResource ChromeButtonStyle}" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="18,0,0,0">
+                <Button x:Name="UnlinkButton"
+                        Content="Unlink Module"
+                        Visibility="Collapsed"
+                        Padding="11,5"
+                        Click="UnlinkButton_OnClick"
+                        Style="{StaticResource ChromeButtonStyle}" />
+                <Button x:Name="ForgetButton"
+                        Content="Forget Module"
+                        Visibility="Collapsed"
+                        Margin="7,0,0,0"
+                        Padding="11,5"
+                        Foreground="{StaticResource DangerBrush}"
+                        Background="#351A20"
+                        BorderBrush="#71313D"
+                        Click="ForgetButton_OnClick"
+                        Style="{StaticResource ChromeButtonStyle}" />
+            </StackPanel>
         </Grid>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
@@ -71,6 +77,22 @@
                     <TextBox x:Name="FolderBox" Grid.Column="1" Padding="7,5" />
                     <Button x:Name="BrowseButton" Grid.Column="2" Content="Browse…" Margin="7,0,0,0" Padding="11,5" Click="BrowseButton_OnClick" Style="{StaticResource ChromeButtonStyle}" />
                 </Grid>
+
+                <StackPanel x:Name="PccSettingsPanel" Visibility="Collapsed" Margin="0,0,0,18">
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="145" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <TextBlock Text="TLK locale" VerticalAlignment="Center" />
+                        <ComboBox x:Name="TlkLocaleBox" Grid.Column="1" Padding="6,4" />
+                    </Grid>
+                    <TextBlock Text="READ-ONLY RESOURCE PCCS" Foreground="{StaticResource AccentBrush}" FontSize="11" FontWeight="Bold" />
+                    <TextBlock Margin="0,4,0,7" Foreground="{StaticResource MutedTextBrush}" FontSize="10" TextWrapping="Wrap"
+                               Text="Register one or more PCCs from this DLC to expose their Texture2D resources. These packages are never modified." />
+                    <ListBox x:Name="ResourcePackageList" Height="72" HorizontalContentAlignment="Stretch" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,7,0,0">
+                        <Button Content="Add PCCs" Padding="11,5" Click="AddResourcePackage_OnClick" Style="{StaticResource ChromeButtonStyle}" />
+                        <Button Content="Remove" Margin="7,0,0,0" Padding="11,5" Click="RemoveResourcePackage_OnClick" Style="{StaticResource ChromeButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
 
                 <Border Background="#111E29" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="12">
                     <StackPanel>

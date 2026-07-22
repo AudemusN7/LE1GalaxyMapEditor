@@ -33,8 +33,28 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        LegendaryExplorerCoreService.Initialize(TaskScheduler.Current);
+        if (args.Contains("--wpf-only", StringComparer.OrdinalIgnoreCase))
+        {
+            Run("WPF views compose headlessly", WpfViewsComposeAfterLoad);
+            Console.WriteLine(_failures == 0 ? "All checks passed." : $"{_failures} check(s) failed.");
+            return _failures == 0 ? 0 : 1;
+        }
         Run("Synthetic CSV load and linking", SyntheticCsvLoadAndLinking);
         Run("Deployed vanilla CSV data", EmbeddedVanillaCsvData);
+        Run("LEC blank PCC template", LecBlankPccTemplate);
+        if (HasVanillaTexturePackage())
+        {
+            Run("Vanilla PCC planet texture extraction", VanillaPccPlanetTextureExtraction);
+        }
+        else
+        {
+            Console.WriteLine("SKIP  Vanilla PCC planet texture extraction (LE1 installation unavailable)");
+        }
+        Run("Transactional PCC table commit", TransactionalPccTableCommit);
+        Run("DLC PCC discovery and profile persistence", DlcPccDiscoveryAndProfiles);
+        Run("Profile workspace PCC relink and forget", ProfileWorkspacePccRelink);
+        Run("LE1 TLK cache diagnostics and StrRef schema", TlkCacheDiagnosticsAndStrRefSchema);
         Run("Invariant numeric parsing", InvariantNumericParsing);
         Run("Inspector field parsing", InspectorEditsModel);
         Run("Compact map-number formatting", CompactMapNumberFormatting);
@@ -186,11 +206,11 @@ internal static class Program
         };
         foreach (var (fileName, expectedHash) in expectedHashes)
         {
-            var path = ApplicationResourcePaths.GetDataFilePath(fileName);
-            True(File.Exists(path), $"deployed CSV exists: {fileName}");
-            using var stream = File.OpenRead(path);
-            Equal(expectedHash, Convert.ToHexString(SHA256.HashData(stream)),
-                $"external BASEGAME CSV is verbatim: {fileName}");
+            using var stream = typeof(CsvGalaxyMapLoader).Assembly.GetManifestResourceStream(
+                CsvGalaxyMapLoader.BuiltInResourcePrefix + fileName);
+            NotNull(stream, $"embedded CSV exists: {fileName}");
+            Equal(expectedHash, Convert.ToHexString(SHA256.HashData(stream!)),
+                $"embedded BASEGAME CSV is verbatim: {fileName}");
         }
 
         var viewModel = new MainViewModel(
@@ -198,6 +218,311 @@ internal static class Program
             new GalaxyMapTextureService(FindTextureDirectory()));
         True(viewModel.LoadBuiltIn(), "MainViewModel loads the embedded source");
         Equal(CsvGalaxyMapLoader.BuiltInSourceName, viewModel.SourceFolder, "built-in source appears in the UI");
+    }
+
+    private static void LecBlankPccTemplate()
+    {
+        WithTemporaryDirectory(folder =>
+        {
+            var cookedPath = Directory.CreateDirectory(Path.Combine(folder, "CookedPCConsole")).FullName;
+            var packagePath = Path.Combine(cookedPath, "GXM_Test.pcc");
+            new GalaxyMapTemplatePackageService().Create(packagePath);
+            var module = new GalaxyMapModule(
+                "PCC Template",
+                "DLC_MOD_PCC_TEMPLATE",
+                ModuleColor.Purple,
+                cookedPath,
+                isReadOnly: false,
+                loadOrder: 1,
+                TestReservations());
+
+            var layer = new PccGalaxyMapLoader().Load(packagePath, module);
+            Equal(6, layer.Schemas.Count, "template table count");
+            Equal(0, layer.AllRows().Count(), "template starts without authored rows");
+            Equal(Path.GetFullPath(packagePath), layer.SourcePackagePath!, "template source PCC");
+            NotNull(layer.SourcePackageFingerprint, "template source fingerprint");
+
+            foreach (var pair in PccGalaxyMapLoader.SupportedExports)
+            {
+                var schema = layer.GetSchema(pair.Key);
+                NotNull(schema, $"{pair.Key} schema");
+                Equal(pair.Value, schema!.SourceIdentity!.ExportObjectName, $"{pair.Key} export identity");
+                Equal("Bio2DANumberedRows", schema.SourceIdentity.ExportClassName, $"{pair.Key} export class");
+                Equal(GalaxyMapCellType.Int, schema.DefaultCellType(CsvRowSnapshot.RowIdColumnName),
+                    $"{pair.Key} row ID type");
+            }
+        });
+    }
+
+    private static void TransactionalPccTableCommit()
+    {
+        WithTemporaryDirectory(folder =>
+        {
+            var cookedPath = Directory.CreateDirectory(Path.Combine(folder, "CookedPCConsole")).FullName;
+            var packagePath = Path.Combine(cookedPath, "GXM_Write_Test.pcc");
+            new GalaxyMapTemplatePackageService().Create(packagePath);
+            var module = new GalaxyMapModule(
+                "PCC Write Test",
+                "DLC_MOD_PCC_WRITE_TEST",
+                ModuleColor.Cyan,
+                cookedPath,
+                isReadOnly: false,
+                loadOrder: 1,
+                TestReservations());
+            var loader = new PccGalaxyMapLoader();
+            var layer = loader.Load(packagePath, module);
+            var workspace = new GalaxyMapWorkspace(new CsvGalaxyMapLoader().LoadBuiltInLayer(), [layer]);
+            workspace.SetActiveModule(module);
+
+            var created = new GalaxyMapRowFactory(workspace).CreateCluster("PCC Cluster", 0.25, 0.75);
+            new PccGalaxyMapWriter(loader).WriteTables(layer, [GalaxyMapTable.Cluster]);
+
+            var reloaded = loader.Load(packagePath, module);
+            var actual = reloaded.Clusters.Single();
+            Equal(created.RowId, actual.RowId, "committed cluster row ID");
+            Equal("PCC Cluster", actual.NameText, "committed cluster name");
+            NearlyEqual(0.25, actual.X, "committed cluster X");
+            NearlyEqual(0.75, actual.Y, "committed cluster Y");
+            True(layer.Clusters.Single().CsvSnapshot?.HasChanges == false,
+                "committed row snapshot is clean");
+            Equal(GalaxyMapCellType.Float,
+                actual.CsvSnapshot!.GetOriginalCell("X")!.Value.Type,
+                "new X cell uses canonical PCC float type");
+            Equal(GalaxyMapCellType.Name,
+                actual.CsvSnapshot.GetOriginalCell("NameText")!.Value.Type,
+                "new NameText cell uses canonical PCC name type");
+
+            layer.Clusters.Single().NameText = "Externally blocked";
+            layer.Clusters.Single().CsvSnapshot!.MarkDirty("NameText");
+            File.SetLastWriteTimeUtc(packagePath, File.GetLastWriteTimeUtc(packagePath).AddSeconds(2));
+            Throws<InvalidOperationException>(
+                () => new PccGalaxyMapWriter(loader).WriteTables(layer, [GalaxyMapTable.Cluster]),
+                message => message.Contains("changed outside", StringComparison.OrdinalIgnoreCase),
+                "external PCC fingerprint change blocks replacement");
+        });
+    }
+
+    private static void DlcPccDiscoveryAndProfiles()
+    {
+        WithTemporaryDirectory(folder =>
+        {
+            var dlcPath = Directory.CreateDirectory(Path.Combine(folder, "DLC_MOD_PROFILE_TEST")).FullName;
+            var cookedPath = Directory.CreateDirectory(Path.Combine(dlcPath, "CookedPCConsole")).FullName;
+            File.WriteAllText(
+                Path.Combine(dlcPath, "AutoLoad.ini"),
+                "[ME1DLCMOUNT]\r\nModName=Profile Test Mod\r\nModMount=3141\r\n",
+                new UTF8Encoding(false));
+            var packagePath = Path.Combine(cookedPath, "BIOG_Profile_GalaxyMap.pcc");
+            new GalaxyMapTemplatePackageService().Create(packagePath);
+            var profileDirectory = Path.Combine(folder, "appdata", "modules");
+            var profileStore = new GalaxyMapModuleProfileStore(profileDirectory);
+            var discovery = new DlcModuleDiscoveryService(profileStore);
+
+            var discovered = discovery.Discover(packagePath);
+            True(discovered.IsNewProfile, "first PCC discovery creates a profile candidate");
+            Equal("Profile Test Mod", discovered.Module.Name, "ModName is sourced from AutoLoad.ini");
+            Equal(3141, discovered.Module.LoadOrder, "ModMount is sourced from AutoLoad.ini");
+            Equal("DLC_MOD_PROFILE_TEST", discovered.Module.Tag, "DLC directory supplies module tag");
+            Equal(Path.GetFullPath(packagePath), discovered.Module.GalaxyMapPackagePath!,
+                "profile module resolves the selected PCC");
+
+            var customized = discovered.Profile with
+            {
+                DisplayName = "Readable Profile Name",
+                ModuleColor = ModuleColor.Purple,
+                TlkLocale = LegendaryExplorerCore.Packages.MELocalization.FRA,
+                ResourcePackages = ["CookedPCConsole/BIOA_Profile_Resources.pcc"],
+                Reservations = TestReservations()
+            };
+            profileStore.Save(customized);
+            var restored = discovery.Discover(packagePath);
+            True(!restored.IsNewProfile, "existing PCC identity reuses its profile");
+            Equal("Readable Profile Name", restored.Module.Name,
+                "editor-owned display name overrides AutoLoad ModName");
+            Equal(ModuleColor.Purple, restored.Module.Color, "module colour is restored from AppData");
+            Equal(LegendaryExplorerCore.Packages.MELocalization.FRA, restored.Module.TlkLocale,
+                "TLK locale is restored from AppData");
+            Equal(TestReservations(), restored.Module.Reservations, "reservations are restored from AppData");
+            Equal(1, restored.Module.ResourcePackagePaths.Count, "resource PCC registration is restored");
+
+            var workspacePath = Path.Combine(folder, "appdata", "workspace.json");
+            var workspaceStore = new GalaxyMapProfileWorkspaceStore(workspacePath);
+            workspaceStore.Save([customized.ProfileId], customized.ProfileId);
+            var remembered = workspaceStore.Load();
+            SequenceEqual([customized.ProfileId], remembered.ProfileIds, "workspace stores profile identities");
+            Equal(customized.ProfileId, remembered.ActiveProfileId!, "workspace stores active profile identity");
+
+            File.WriteAllText(
+                Path.Combine(dlcPath, "AutoLoad.ini"),
+                "[ME1DLCMOUNT]\r\nModName=Profile Test Mod\r\nModMount=broken\r\n",
+                new UTF8Encoding(false));
+            Throws<GalaxyMapLoadException>(
+                () => discovery.Discover(packagePath),
+                message => message.Contains("valid non-negative integer", StringComparison.OrdinalIgnoreCase),
+                "malformed ModMount is rejected rather than becoming zero");
+        });
+    }
+
+    private static void ProfileWorkspacePccRelink()
+    {
+        WithTemporaryDirectory(folder =>
+        {
+            var dlcPath = Directory.CreateDirectory(Path.Combine(folder, "DLC_MOD_RELINK_TEST")).FullName;
+            var cookedPath = Directory.CreateDirectory(Path.Combine(dlcPath, "CookedPCConsole")).FullName;
+            File.WriteAllText(
+                Path.Combine(dlcPath, "AutoLoad.ini"),
+                "[ME1DLCMOUNT]\r\nModName=Relink Test\r\nModMount=4242\r\n",
+                new UTF8Encoding(false));
+            var packagePath = Path.Combine(cookedPath, "BIOG_Relink_GalaxyMap.pcc");
+            new GalaxyMapTemplatePackageService().Create(packagePath);
+            var seedModule = new GalaxyMapModule(
+                "Reservation seed", "DLC_MOD_RELINK_TEST", ModuleColor.Cyan, cookedPath,
+                isReadOnly: false, loadOrder: 4242, TestReservations());
+            var pccLoader = new PccGalaxyMapLoader();
+            var seedLayer = pccLoader.Load(packagePath, seedModule);
+            seedLayer.Add(new Cluster { RowId = 450, Label = "Cluster50", NameText = "Seed A" });
+            seedLayer.Add(new Cluster { RowId = 455, Label = "Cluster51", NameText = "Seed B" });
+            seedLayer.Add(new GalaxySystem { RowId = 720, Label = "System01", NameText = "Seed System" });
+            new PccGalaxyMapWriter(pccLoader).WriteTables(
+                seedLayer,
+                [GalaxyMapTable.Cluster, GalaxyMapTable.System]);
+            var profileStore = new GalaxyMapModuleProfileStore(Path.Combine(folder, "appdata", "modules"));
+            var workspaceStore = new GalaxyMapProfileWorkspaceStore(Path.Combine(folder, "appdata", "workspace.json"));
+            var loader = new CsvGalaxyMapLoader();
+            var session = new EditorSession();
+            var edits = new EditSessionService(session, profileStore: profileStore);
+            var workflows = new WorkspaceWorkflowService(
+                session,
+                edits,
+                loader,
+                workspaceStore: new GalaxyMapWorkspaceStore(Path.Combine(folder, "legacy-unused.json")),
+                profileWorkspaceStore: workspaceStore,
+                profileStore: profileStore);
+
+            True(workflows.LoadBuiltIn().Succeeded, "profile workspace loads BASEGAME");
+            True(workflows.OpenExistingModule(packagePath).Succeeded, "selected PCC mounts through discovery");
+            Equal(new RowIdRange(450, 455), session.Workspace!.Modules.Single().Reservations.Cluster!.Value,
+                "new profile infers its Cluster reservation from physical PCC rows");
+            Equal(new RowIdRange(720, 720), session.Workspace.Modules.Single().Reservations.System!.Value,
+                "new profile infers its System reservation from physical PCC rows");
+            True(edits.Commit(workflows.CommitCurrentWorkspace).Succeeded, "linked profile workspace commits");
+
+            var restoredSession = new EditorSession();
+            var restoredEdits = new EditSessionService(restoredSession, profileStore: profileStore);
+            var restoredWorkflows = new WorkspaceWorkflowService(
+                restoredSession,
+                restoredEdits,
+                loader,
+                workspaceStore: new GalaxyMapWorkspaceStore(Path.Combine(folder, "legacy-unused.json")),
+                profileWorkspaceStore: workspaceStore,
+                profileStore: profileStore);
+            var restored = restoredWorkflows.LoadRememberedWorkspace();
+            True(restored.Succeeded, "remembered profile reopens its PCC");
+            Equal(1, restoredSession.Workspace!.ModuleLayers.Count, "one profile-backed layer restored");
+            Equal(Path.GetFullPath(packagePath),
+                restoredSession.Workspace.ModuleLayers.Single().SourcePackagePath!,
+                "restored layer retains PCC source identity");
+
+            var restoredModule = restoredSession.Workspace.Modules.Single();
+            True(restoredWorkflows.ForgetModule(restoredModule).Succeeded,
+                "forget removes a clean linked profile");
+            Equal(0, restoredSession.Workspace.ModuleLayers.Count,
+                "forgotten module is removed from the live workspace");
+            Equal(0, workspaceStore.Load().ProfileIds.Count,
+                "forgotten module is removed from workspace persistence");
+            Equal(0, profileStore.LoadAll().Count, "forget deletes only the editor profile");
+            True(File.Exists(packagePath), "forget leaves the DLC PCC untouched");
+        });
+    }
+
+    private static void TlkCacheDiagnosticsAndStrRefSchema()
+    {
+        WithTemporaryDirectory(folder =>
+        {
+            var cachePath = Path.Combine(folder, "LE1LoadedTLKs.JSON");
+            File.WriteAllText(
+                cachePath,
+                "[{\"Item1\":1,\"Item2\":\"missing.pcc\"},{\"bad\":true},42,{\"Item1\":2,\"Item2\":\"\\u0000\"}]",
+                new UTF8Encoding(false));
+            var service = new GalaxyMapTlkService(cachePath);
+            service.Reload();
+            Equal("BioTlkFile", GalaxyMapTlkService.TalkFileClassName,
+                "LE1 TLK exports use the BioTlkFile class name");
+            Equal(4, service.Diagnostics.Count, "each malformed or missing TLK entry is diagnosed");
+            Equal(0, service.AvailableLocales.Count, "invalid TLK entries do not create a locale fallback");
+            True(service.Find(LegendaryExplorerCore.Packages.MELocalization.INT, 1) is null,
+                "missing locale lookup does not silently fall back");
+            Equal(LegendaryExplorerCore.Packages.MELocalization.INT,
+                GalaxyMapTlkService.ResolvePackageLocale("DLC_MOD_Test_GlobalTlk.pcc", LegendaryExplorerCore.Packages.MELocalization.DEU)!.Value,
+                "unsuffixed GlobalTlk packages are authoritatively INT");
+            Equal(LegendaryExplorerCore.Packages.MELocalization.DEU,
+                GalaxyMapTlkService.ResolvePackageLocale("DLC_MOD_Test_GlobalTlk_DE.pcc", LegendaryExplorerCore.Packages.MELocalization.INT)!.Value,
+                "the canonical DE suffix resolves to German");
+            True(GalaxyMapTlkService.ResolvePackageLocale(
+                    "DLC_MOD_Test_GlobalTlk_GE.pcc", LegendaryExplorerCore.Packages.MELocalization.DEU) is null,
+                "the legacy GE suffix is not treated as canonical German");
+            True(GalaxyMapTlkService.ResolvePackageLocale(
+                    "DLC_MOD_Test_GlobalTlk_HU.pcc", LegendaryExplorerCore.Packages.MELocalization.INT) is null,
+                "optional Hungarian packages cannot enter the INT index");
+
+            var baseGameSettings = new BaseGameSettingsStore(Path.Combine(folder, "basegame.json"));
+            Equal(LegendaryExplorerCore.Packages.MELocalization.INT, baseGameSettings.LoadLocale(),
+                "BASEGAME locale defaults to INT");
+            baseGameSettings.SaveLocale(LegendaryExplorerCore.Packages.MELocalization.FRA);
+            Equal(LegendaryExplorerCore.Packages.MELocalization.FRA, baseGameSettings.LoadLocale(),
+                "BASEGAME locale persists independently of module profiles");
+
+            var inspector = new PropertyInspectorViewModel(tlk: service);
+            inspector.Inspect(new CsvGalaxyMapLoader().LoadBuiltInLayer().Clusters.First());
+            var lookup = inspector.Sections.SelectMany(section => section.Fields)
+                .Single(field => field.Name == "Name").StrRefLookup;
+            NotNull(lookup, "StrRef field exposes reusable lookup presentation");
+            Equal("TLK cache unavailable", lookup!.State,
+                "inspector distinguishes an unavailable TLK cache");
+
+            var dlcPath = Directory.CreateDirectory(Path.Combine(folder, "DLC_MOD_TLK_SCAN")).FullName;
+            var cookedPath = Directory.CreateDirectory(Path.Combine(dlcPath, "CookedPCConsole")).FullName;
+            var galaxyMapPackage = Path.Combine(cookedPath, "BIOG_TlkScan_GalaxyMap.pcc");
+            var globalTlkPackage = Path.Combine(cookedPath, "DLC_MOD_TLK_SCAN_GlobalTlk.pcc");
+            new GalaxyMapTemplatePackageService().Create(galaxyMapPackage);
+            new GalaxyMapTemplatePackageService().Create(globalTlkPackage);
+            File.WriteAllText(cachePath, "[]", new UTF8Encoding(false));
+            var pccModule = new GalaxyMapModule(
+                "TLK Scan",
+                "DLC_MOD_TLK_SCAN",
+                ModuleColor.Cyan,
+                cookedPath,
+                isReadOnly: false,
+                loadOrder: 9000,
+                profileId: "tlk-scan-profile",
+                dlcRootPath: dlcPath,
+                galaxyMapPackagePath: galaxyMapPackage);
+            service.Reload([pccModule]);
+            True(service.Diagnostics.Any(diagnostic =>
+                    diagnostic.Contains("DLC_MOD_TLK_SCAN_GlobalTlk.pcc", StringComparison.OrdinalIgnoreCase) &&
+                    diagnostic.Contains("BioTlkFile", StringComparison.Ordinal)),
+                "mounted DLC GlobalTlk PCCs are inspected for BioTlkFile exports");
+        });
+
+        True(GalaxyMapStrRefSchema.IsStrRef(GalaxyMapTable.Cluster, "Name"), "Cluster.Name is a StrRef");
+        True(GalaxyMapStrRefSchema.IsStrRef(GalaxyMapTable.Planet, "Description"),
+            "Planet.Description is a StrRef");
+        True(!GalaxyMapStrRefSchema.IsStrRef(GalaxyMapTable.Planet, "NameText"),
+            "NameText is explicitly not a StrRef");
+        True(!GalaxyMapStrRefSchema.IsStrRef(GalaxyMapTable.Map, "Map"),
+            "ordinary Name cells are not treated as StrRefs");
+        True(PlanetAppearanceSchema.IsSupportedTextureObject("GXM_PlanetNormal01"),
+            "known GXM planet textures are eligible for package-backed menus");
+        True(!PlanetAppearanceSchema.IsSupportedTextureObject("Cluster03"),
+            "non-planet Texture2D exports are excluded from Planet Designer menus");
+        True(!PlanetAppearanceSchema.IsSupportedTextureObject("GXM_CoronaGradient"),
+            "renderer-only GXM textures are excluded from editable material slots");
+        True(PlanetAppearanceSchema.IsSelectablePlanetTextureObject("My_StrangelyNamedTexture", true, true),
+            "Planet-referenced custom PCC textures do not have to follow the vanilla naming allowlist");
+        True(!PlanetAppearanceSchema.IsSelectablePlanetTextureObject("My_StrangelyNamedTexture", true, false),
+            "unreferenced custom PCC textures remain excluded from Planet dropdowns");
+        True(!PlanetAppearanceSchema.IsSelectablePlanetTextureObject("My_StrangelyNamedTexture", false, true),
+            "references do not admit unknown textures from non-resource game packages");
     }
 
     private static void InvariantNumericParsing()
@@ -649,6 +974,7 @@ internal static class Program
             var navigationTemplateFolder = Path.Combine(folder, "navigation-templates");
             Directory.CreateDirectory(navigationTemplateFolder);
             File.WriteAllText(Path.Combine(navigationTemplateFolder, "inaccessible-simulation.json"), "not JSON");
+            var packageTextureOptionCalls = 0;
             var navigationViewModel = new PlanetDesignerViewModel(
                 () => editorSession.Workspace,
                 workflow.Open(navigationSource),
@@ -662,7 +988,16 @@ internal static class Program
                     : editorSession.Workspace?.Layers.FirstOrDefault(layer =>
                             string.Equals(layer.Module.Tag, moduleTag, StringComparison.OrdinalIgnoreCase))
                         ?.Find(key) as Planet,
-                new PlanetAppearanceTemplateStore(navigationTemplateFolder));
+                _ => WorkflowResult.Failure("Texture linking is not used by this test."),
+                _ => null,
+                new PlanetAppearanceTemplateStore(navigationTemplateFolder),
+                packageTextureOptions: () =>
+                {
+                    packageTextureOptionCalls++;
+                    return ["BIOA_GXM10_T.GXM_ContinentMask01"];
+                });
+            Equal(1, packageTextureOptionCalls,
+                "Planet Designer enumerates package texture choices once per session");
             True(navigationViewModel.StatusMessage.Contains("Skipped", StringComparison.OrdinalIgnoreCase),
                 "template read warnings are surfaced without preventing Designer startup");
             True(!navigationViewModel.SaveTemplate(string.Empty, null),
@@ -674,7 +1009,29 @@ internal static class Program
                 "dismissing the designer error clears its banner state");
             var navigationBump = navigationViewModel.Groups.SelectMany(group => group.Fields)
                 .Single(field => field.Definition.Id == "Bump_Amount");
+            var originalNavigationBump = navigationBump.Primary.Value;
             navigationBump.Primary.Value = "0.8125";
+            True(navigationViewModel.UndoCommand.CanExecute(null),
+                "a dirty Planet Designer property edit immediately enables Undo");
+            navigationViewModel.UndoCommand.Execute(null);
+            Equal(originalNavigationBump, navigationBump.Primary.Value,
+                "Planet Designer Undo restores the preceding draft property value");
+            True(navigationViewModel.RedoCommand.CanExecute(null),
+                "undoing a Planet Designer property edit enables Redo");
+            navigationViewModel.RedoCommand.Execute(null);
+            Equal("0.8125", navigationBump.Primary.Value,
+                "Planet Designer Redo restores the draft property edit");
+            navigationViewModel.BeginDraftPropertyEdit();
+            navigationBump.Primary.Value = "0.7";
+            navigationBump.Primary.Value = "0.6";
+            navigationBump.Primary.Value = "0.5";
+            navigationViewModel.EndDraftPropertyEdit();
+            navigationViewModel.UndoCommand.Execute(null);
+            Equal("0.8125", navigationBump.Primary.Value,
+                "one Undo restores the value from before a complete slider drag");
+            navigationViewModel.RedoCommand.Execute(null);
+            Equal("0.5", navigationBump.Primary.Value,
+                "one Redo restores the final value from a complete slider drag");
             True(!navigationViewModel.TryNavigateToPlanet(
                     navigationTarget.Key,
                     navigationTarget.Origin?.ModuleTag,
@@ -807,7 +1164,13 @@ internal static class Program
     {
         var planet = new CsvGalaxyMapLoader().LoadBuiltIn().Planets.Single(planet =>
             planet.ExtraFields.GetValueOrDefault("Shader") == "GXM_Earth");
-        using var renderer = new PlanetPreviewRenderer(320, 180);
+        var sharedTexture = new PlanetPreviewTextureSource(
+            "test-stars",
+            File.ReadAllBytes(Path.Combine(FindTextureDirectory(), "stars_bg.jpg")));
+        using var renderer = new PlanetPreviewRenderer(
+            320,
+            180,
+            materialTextureResolver: _ => sharedTexture);
         var material = PlanetAppearanceCodec.ToRenderMaterial(PlanetAppearanceCodec.Decode(planet));
         var frame = renderer.Render(material, new());
         var animatedFrame = renderer.Render(
@@ -841,6 +1204,41 @@ internal static class Program
             "preview resolution follows an exact 16:9 viewport");
         Equal(new PlanetPreviewPixelSize(800, 450), PlanetPreviewResolution.Fit16By9(800, 800),
             "preview resolution letterboxes a tall viewport without fixing a source resolution");
+    }
+
+    private static void VanillaPccPlanetTextureExtraction()
+    {
+        var references = PlanetAppearanceSchema.Properties
+            .SelectMany(property => property.TextureOptions ?? [])
+            .Append("BIOA_GXM10_T.GXM_CoronaGradient")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var textureService = new GalaxyMapTextureService();
+        var textures = Task.Run(() => textureService.GetPackageTextureData([], references))
+            .GetAwaiter().GetResult();
+        Equal(references.Length, textures.Count,
+            "every renderer GXM texture resolves from BIOA_NOR10_03_GM_LAY.pcc");
+        foreach (var reference in references)
+        {
+            True(textures.TryGetValue(reference, out var texture) &&
+                 texture.Contents.AsSpan().StartsWith(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }),
+                $"{reference} decodes to PNG data");
+        }
+
+        var sources = textures.ToDictionary(
+            item => item.Key,
+            item => new PlanetPreviewTextureSource(item.Value.CacheKey, item.Value.Contents),
+            StringComparer.OrdinalIgnoreCase);
+        var earth = new CsvGalaxyMapLoader().LoadBuiltIn().Planets.Single(planet =>
+            planet.ExtraFields.GetValueOrDefault("Shader") == "GXM_Earth");
+        var material = PlanetAppearanceCodec.ToRenderMaterial(PlanetAppearanceCodec.Decode(earth));
+        using var renderer = new PlanetPreviewRenderer(
+            320,
+            180,
+            materialTextureResolver: reference => sources.GetValueOrDefault(reference));
+        var frame = renderer.Render(material, new());
+        Equal(0, frame.MissingTextures.Count,
+            "Earth renders from package textures without the stars fallback");
     }
 
     private static void CompactMapNumberFormatting()
@@ -988,6 +1386,13 @@ internal static class Program
             "RingColor -1 previews as not applicable rather than opaque white");
 
         var availability = inspector.Sections.Single(section => section.Title == "Visibility and usability");
+        True(inspector.Sections.All(section => section.Title != "Text and interaction"),
+            "Planet inspector no longer has a Text and interaction category");
+        var planetSection = inspector.Sections.Single(section => section.Title == "Planet");
+        Equal("Description", planetSection.Fields[4].Name,
+            "Description follows Internal name in the Planet category");
+        SequenceEqual(["ButtonLabel", "Event"], availability.Fields.Take(2).Select(field => field.Name),
+            "Use button and Remote event lead Visibility and usability");
         availability.IsExpanded = false;
         True(!availability.IsExpanded, "inspector section expansion state supports WPF's two-way Expander binding");
         availability.IsExpanded = true;
@@ -1071,25 +1476,18 @@ internal static class Program
             "malformed texture reference rejected");
 
         var textures = new GalaxyMapTextureService(FindTextureDirectory());
-        var galaxy = textures.GetGalaxyTexture();
-        NotNull(galaxy, "galaxy texture loads");
-        Equal(2048, galaxy!.PixelWidth, "galaxy texture width");
-        Equal(2048, galaxy.PixelHeight, "galaxy texture height");
-        Equal(PixelFormats.Bgr32, galaxy.Format, "galaxy texture has no alpha channel");
-        True(galaxy.IsFrozen, "galaxy texture is safe to share across threads");
-
-        var cluster03 = textures.GetClusterTexture("BIOA_GalaxyMap_T.Cluster03");
-        NotNull(cluster03, "Serpent background asset loads");
-        Equal(PixelFormats.Bgr32, cluster03!.Format, "cluster texture has no alpha channel");
-        True(cluster03.IsFrozen, "cluster texture is safe to share across views");
-        True(ReferenceEquals(cluster03, textures.GetClusterTexture("Cluster03")), "decoded texture is cached");
-
-        var stars = textures.GetSystemTexture();
-        NotNull(stars, "System starfield texture loads");
-        Equal(2048, stars!.PixelWidth, "System starfield width");
-        Equal(2048, stars.PixelHeight, "System starfield height");
-        Equal(PixelFormats.Bgr32, stars.Format, "System starfield ignores PNG alpha");
-        True(stars.IsFrozen, "System starfield is safe to share across threads");
+        var decoded = textures.LoadTextureBytes(
+            "retained-stars-background",
+            File.ReadAllBytes(Path.Combine(FindTextureDirectory(), "stars_bg.jpg")));
+        NotNull(decoded, "retained non-game background texture loads");
+        Equal(PixelFormats.Bgr32, decoded!.Format, "decoded textures ignore source alpha");
+        True(decoded.IsFrozen, "decoded texture is safe to share across threads");
+        True(ReferenceEquals(
+                decoded,
+                textures.LoadTextureBytes(
+                    "retained-stars-background",
+                    File.ReadAllBytes(Path.Combine(FindTextureDirectory(), "stars_bg.jpg")))),
+            "decoded texture is cached");
     }
 
     private static void HierarchyNavigationSemantics()
@@ -1697,6 +2095,17 @@ internal static class Program
 
     private static void TableCellEditingUsesExistingWorkflows()
     {
+        var longTlkTooltip = new TableCellViewModel(
+            "123",
+            GalaxyMapModule.BaseGameTag,
+            ModuleColor.BaseGameBlue,
+            isStaged: false,
+            differsFromLowerInstance: false,
+            overrideCount: 1,
+            "Effective value supplied by BIOGame_INT.pcc.\n\n" + new string('x', 125)).ToolTipText;
+        True(longTlkTooltip.Split('\n').All(line => line.Length <= 60),
+            "2DA hover text wraps every line to at most 60 characters");
+
         var loader = new CsvGalaxyMapLoader();
         var baseLayer = loader.LoadBuiltInLayer();
         var module = new GalaxyMapModule(
@@ -2979,11 +3388,11 @@ internal static class Program
             var nebulaSystem = viewModel.Document!.Systems.First(system => system.ShowNebula == 1 && system.Cluster is not null);
             var cluster = nebulaSystem.Cluster!;
             FindNode(viewModel, row => row is Cluster candidate && candidate.RowId == cluster.RowId).IsSelected = true;
-            var sourceTexture = Path.Combine(FindTextureDirectory(), "Cluster01.jpg");
+            var sourceTexture = Path.Combine(FindTextureDirectory(), "stars_bg.jpg");
             True(viewModel.StageClusterTexture(cluster, viewModel.ActiveModule!, sourceTexture),
                 "JPEG module texture is staged");
             var expectedPath = Path.Combine(viewModel.ActiveModule!.FolderPath!, "textures",
-                $"Cluster_{cluster.RowId}_Cluster01.jpg");
+                $"Cluster_{cluster.RowId}_stars_bg.jpg");
             True(!File.Exists(expectedPath), "texture copy waits for Commit");
             True(viewModel.CurrentViewModel is ClusterViewModel { BackgroundTexture: not null },
                 "staged Cluster texture previews immediately");
@@ -3003,7 +3412,7 @@ internal static class Program
             True(viewModel.CommitPendingChanges(), "texture metadata commit succeeds");
             True(File.Exists(expectedPath), "texture is copied into module textures folder on Commit");
             var reloaded = new GalaxyMapModuleManifestStore().Load(viewModel.ActiveModule.FolderPath!);
-            Equal("textures/Cluster_" + cluster.RowId + "_Cluster01.jpg",
+            Equal("textures/Cluster_" + cluster.RowId + "_stars_bg.jpg",
                 reloaded.ClusterTextureLinks[cluster.RowId], "manifest stores Cluster texture link");
             NotNull(new GalaxyMapTextureService(FindTextureDirectory()).GetModuleClusterTexture(reloaded, cluster.RowId),
                 "committed module texture resolves independently of a Cluster row override");
@@ -3233,7 +3642,7 @@ internal static class Program
         True(inspector.Sections.All(section => section.Title != "Planet appearance"),
             "real appearance columns are reserved for the Planet Designer");
         Equal(94, PlanetAppearanceSchema.Columns.Count, "real appearance schema column count");
-        Equal(17, otherColumns.Length, "real nonappearance extra column count");
+        Equal(19, otherColumns.Length, "real nonappearance and interaction column count");
 
         var ilos = document.PlanetsByRowId[86];
         NotNull(ilos.PlotPlanet, "Ilos PlotPlanet");
@@ -3293,6 +3702,33 @@ internal static class Program
             Equal(new Thickness(0, 2, 0, 2), (Thickness)menuSeparatorStyle.Setters.OfType<Setter>()
                 .Single(setter => setter.Property == FrameworkElement.MarginProperty).Value,
                 "menu separator spans the context menu width");
+            var tlkLookup = new StrRefLookupControl();
+            Compose(tlkLookup, application.Dispatcher);
+            var tlkButton = (ToggleButton)tlkLookup.FindName("LookupButton");
+            Equal(((SolidColorBrush)application.FindResource("PanelRaisedBrush")).Color,
+                ((SolidColorBrush)tlkButton.Background).Color,
+                "TLK lookup button uses the themed chrome background");
+            Equal(((SolidColorBrush)application.FindResource("BorderBrush")).Color,
+                ((SolidColorBrush)tlkButton.BorderBrush).Color,
+                "TLK lookup button uses the themed chrome border");
+            var pccSetup = new ModuleSetupWindow(
+                selectParentFolder: false,
+                folderPath: Path.Combine(folder, "GalaxyMap.pcc"),
+                suggestedName: "V Test",
+                suggestedTag: "DLC_UNC",
+                suggestedReservations: ModuleIdReservations.Empty,
+                identityReadOnly: true);
+            True(!((TextBox)pccSetup.FindName("NameBox")).IsReadOnly,
+                "PCC module display name remains editable");
+            True(((TextBox)pccSetup.FindName("TagBox")).IsReadOnly,
+                "PCC module tag remains sourced from AutoLoad");
+            pccSetup.Close();
+            var baseGameSettings = new BaseGameSettingsWindow(
+                LegendaryExplorerCore.Packages.MELocalization.INT);
+            Equal(((SolidColorBrush)application.FindResource("AppBackgroundBrush")).Color,
+                ((SolidColorBrush)baseGameSettings.Background).Color,
+                "BASEGAME settings uses the application navy background");
+            baseGameSettings.Close();
             Exception? dispatcherFailure = null;
             application.DispatcherUnhandledException += (_, eventArgs) =>
             {
@@ -3441,7 +3877,7 @@ internal static class Program
             Compose(textureEditorHost, application.Dispatcher);
             True(textureDesigner.LinkModuleTexture(new PlanetTextureLinkRequest(
                     "BIOA_TABLE_GRID_EDIT_T.RefreshSafety",
-                    Path.Combine(FindTextureDirectory(), "Cluster01.jpg"),
+                    Path.Combine(FindTextureDirectory(), "stars_bg.jpg"),
                     PlanetTextureCategory.Continent | PlanetTextureCategory.Normals)),
                 "a module texture can be linked while all editable texture selectors are live");
             application.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
@@ -3531,9 +3967,19 @@ internal static class Program
                 "move destination dialog composes with collision preview data");
             True(viewModel.CurrentViewModel is GalaxyViewModel, "Galaxy view is active after load");
             var loadedGalaxy = (GalaxyViewModel)viewModel.CurrentViewModel!;
-            NotNull(loadedGalaxy.BackgroundTexture, "packaged galaxy texture is available to the Galaxy view");
-            Equal(PixelFormats.Bgr32, ((System.Windows.Media.Imaging.BitmapSource)loadedGalaxy.BackgroundTexture!).Format,
-                "packaged galaxy texture ignores alpha");
+            var hasVanillaTexturePackage = HasVanillaTexturePackage();
+            if (hasVanillaTexturePackage)
+            {
+                NotNull(loadedGalaxy.BackgroundTexture, "packaged galaxy texture is available to the Galaxy view");
+                Equal(PixelFormats.Bgr32,
+                    ((System.Windows.Media.Imaging.BitmapSource)loadedGalaxy.BackgroundTexture!).Format,
+                    "packaged galaxy texture ignores alpha");
+            }
+            else
+            {
+                True(loadedGalaxy.BackgroundTexture is null,
+                    "missing LE1 installation leaves the package background recoverably unavailable");
+            }
             var mapSquare = (FrameworkElement)window.FindName("MapSquare");
             NearlyEqual(mapSquare.ActualWidth, mapSquare.ActualHeight, "MainWindow map viewport is square");
 
@@ -3564,7 +4010,10 @@ internal static class Program
             True(viewModel.CurrentViewModel is ClusterViewModel, "Cluster view composes");
 
             var clusterView = (ClusterViewModel)viewModel.CurrentViewModel!;
-            NotNull(clusterView.BackgroundTexture, "Cluster background resolves from its CSV value");
+            if (hasVanillaTexturePackage)
+            {
+                NotNull(clusterView.BackgroundTexture, "Cluster background resolves from its CSV value");
+            }
             var clusterControl = new ClusterView { DataContext = clusterView };
             Compose(clusterControl, application.Dispatcher);
             True(FindVisualDescendants<TextBlock>(clusterControl).Any(text =>
@@ -3573,8 +4022,11 @@ internal static class Program
                 "System map labels use the larger 14-point size");
             var originalBackground = clusterView.BackgroundTexture;
             clusterView.Cluster.Background = "BIOA_GalaxyMap_T.Cluster03";
-            True(!ReferenceEquals(originalBackground, clusterView.BackgroundTexture),
-                "editing Background refreshes the visible texture in memory");
+            if (hasVanillaTexturePackage)
+            {
+                True(!ReferenceEquals(originalBackground, clusterView.BackgroundTexture),
+                    "editing Background refreshes the visible texture in memory");
+            }
 
             var actionStyle = (Style)window.FindResource("InspectorActionButtonStyle");
             var checkboxStyle = (Style)window.FindResource("InspectorCheckboxStyle");
@@ -3599,8 +4051,11 @@ internal static class Program
             cluster.EnterSystemCommand.Execute(firstClusterNode.Children[0]);
             Compose(window, application.Dispatcher);
             True(viewModel.CurrentViewModel is SystemViewModel, "System view composes");
-            NotNull(((SystemViewModel)viewModel.CurrentViewModel!).BackgroundTexture,
-                "System view receives the packaged stars01 background");
+            if (hasVanillaTexturePackage)
+            {
+                NotNull(((SystemViewModel)viewModel.CurrentViewModel!).BackgroundTexture,
+                    "System view receives the packaged stars01 background");
+            }
             var nebulaSystemId = viewModel.Document!.Systems.First(system => system.ShowNebula == 1).RowId;
             var nebulaSystemNode = FindNode(viewModel, row => row is GalaxySystem system && system.RowId == nebulaSystemId);
             nebulaSystemNode.IsSelected = true;
@@ -3623,6 +4078,7 @@ internal static class Program
             True(builtInViewModel.LoadBuiltIn(), "embedded BASEGAME loads for live inspector composition");
             var builtInWindow = new MainWindow { DataContext = builtInViewModel };
             Compose(builtInWindow, application.Dispatcher);
+            builtInViewModel.WarmPlanetPreviewTextures();
             var builtInClusterNode = builtInViewModel.HierarchyRoots.Single().Children.First();
             builtInClusterNode.IsSelected = true;
             Compose(builtInWindow, application.Dispatcher);
@@ -3636,7 +4092,8 @@ internal static class Program
                 "inspector property-name lane is widened by approximately twenty percent");
 
             var materialPlanet = builtInViewModel.Document!.Planets.First(PlanetAppearanceCodec.IsAppearanceCapable);
-            var designerWindow = new PlanetDesignerWindow(builtInViewModel.CreatePlanetDesigner(materialPlanet.Key));
+            var designerViewModel = builtInViewModel.CreatePlanetDesigner(materialPlanet.Key);
+            var designerWindow = new PlanetDesignerWindow(designerViewModel);
             designerWindow.PrepareForFirstShow();
             var preparedDesignerContent = (FrameworkElement)designerWindow.Content;
             True(preparedDesignerContent.ActualWidth > 0 && preparedDesignerContent.ActualHeight > 0,
@@ -3657,7 +4114,18 @@ internal static class Program
                     application.Dispatcher,
                     () => designerWindow.ViewModel.PreviewImage is not null,
                     TimeSpan.FromSeconds(8)),
-                "Planet Designer completes its asynchronous first live preview");
+                "Planet Designer completes its asynchronous first live preview" +
+                (designerWindow.ViewModel.ErrorMessage.Length == 0
+                    ? $" ({designerWindow.ViewModel.PreviewDetail}; {designerWindow.ViewModel.StatusMessage})"
+                    : $" ({designerWindow.ViewModel.ErrorMessage})"));
+            if (hasVanillaTexturePackage)
+            {
+                True(!designerWindow.ViewModel.PreviewDetail.Contains(
+                        "fallback textures",
+                        StringComparison.OrdinalIgnoreCase),
+                    "Planet Designer's first frame uses PCC textures" +
+                    $" ({designerWindow.ViewModel.PreviewDetail}; {designerWindow.ViewModel.ErrorMessage})");
+            }
             var liveColorDialog = new ColorPickerWindow("-1") { Owner = designerWindow };
             liveColorDialog.Show();
             liveColorDialog.Activate();
@@ -3678,10 +4146,11 @@ internal static class Program
             var textureCombo = FindVisualDescendants<ComboBox>(designerWindow)
                 .First(comboBox => comboBox.DataContext is PlanetAppearanceFieldViewModel { IsTexture: true });
             textureCombo.ApplyTemplate();
-            var editableTextureText = (TextBox)textureCombo.Template.FindName("PART_EditableTextBox", textureCombo);
+            True(!textureCombo.IsEditable,
+                "texture dropdown only accepts supported options");
             Equal(((PlanetAppearanceFieldViewModel)textureCombo.DataContext).Primary.Value,
-                editableTextureText.Text,
-                "editable texture dropdown renders its current texture reference");
+                textureCombo.SelectedItem?.ToString() ?? string.Empty,
+                "texture dropdown selects its current texture reference");
             var saveCurrentButton = FindVisualDescendants<Button>(designerWindow)
                 .Single(button => Equals(button.Content, "Save current..."));
             True(saveCurrentButton.ActualHeight >= 30,
@@ -3788,7 +4257,7 @@ internal static class Program
                 .Single(field => field.Definition.Id == "ContinentMask01");
             textureField.Primary.Value = "TestPackage.CustomContinentTexture";
             textureField.Refresh();
-            True(textureField.TextureOptions.Contains("TestPackage.CustomContinentTexture"),
+            True(textureField.TextureOptions.Contains("CustomContinentTexture"),
                 "texture dropdown keeps a newly loaded module texture available after refreshing the appearance base");
 
             if (dispatcherFailure is not null)
@@ -3879,8 +4348,14 @@ internal static class Program
             var directory = new DirectoryInfo(startingPath);
             while (directory is not null)
             {
-                var candidate = Path.Combine(directory.FullName, "src", "LE1GalaxyMapEditor", "resources", "textures");
-                if (File.Exists(Path.Combine(candidate, GalaxyMapTextureService.GalaxyAssetName)))
+                var candidate = Path.Combine(
+                    directory.FullName,
+                    "src",
+                    "LE1GalaxyMapEditor",
+                    "resources",
+                    "planet-designer",
+                    "Textures");
+                if (File.Exists(Path.Combine(candidate, "stars_bg.jpg")))
                 {
                     return candidate;
                 }
@@ -3890,6 +4365,13 @@ internal static class Program
         }
 
         throw new DirectoryNotFoundException("Could not locate the project texture resources.");
+    }
+
+    private static bool HasVanillaTexturePackage()
+    {
+        var cookedPath = LegendaryExplorerCore.GameFilesystem.LE1Directory.CookedPCPath;
+        return !string.IsNullOrWhiteSpace(cookedPath) &&
+               File.Exists(Path.Combine(cookedPath, "BIOA_NOR10_03_GM_LAY.pcc"));
     }
 
     private static void WithFixture(Action<string> test)

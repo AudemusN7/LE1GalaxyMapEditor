@@ -13,6 +13,8 @@ using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Presentation;
 using LE1GalaxyMapEditor.Services;
 using LE1GalaxyMapEditor.Views;
+using LegendaryExplorerCore.GameFilesystem;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.ViewModels;
 
@@ -24,6 +26,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly GalaxyMapTextureService _textures;
     private readonly GalaxyMapModuleManifestStore _manifestStore = new();
     private readonly GalaxyMapWorkspaceStore _workspaceStore;
+    private readonly bool _usesPccModules;
+    private readonly GalaxyMapTlkService _tlkService;
+    private readonly Action<MELocalization>? _saveBaseGameLocale;
     private readonly IEditorDialogs _dialogs;
     private readonly ValidationCoordinator _validation;
     private readonly EditorSession _session = new();
@@ -38,6 +43,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly PlanetDesignerWorkflow _planetDesigner;
     private readonly HierarchyNavigationCoordinator _navigation;
     private readonly CommitPreviewBuilder _commitPreviewBuilder;
+    private readonly object _planetTextureWarmupLock = new();
+    private Task? _planetTextureWarmupTask;
 
     private GalaxyMapWorkspace? _workspace;
     private GalaxyMapDocument? _document;
@@ -52,6 +59,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isApplying;
     private bool _isDisposed;
     private string _hierarchySearch = string.Empty;
+    private MELocalization _baseGameTlkLocale;
 
     public MainViewModel(
         CsvGalaxyMapLoader loader,
@@ -63,23 +71,50 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         IDeferredScheduler? deferredScheduler = null,
         Func<PlanetShaderNameRequest, string?>? shaderNameSelector = null,
         Func<CommitPreview, bool>? commitReviewAction = null,
-        Func<ClusterLabelRequest, string?>? clusterLabelSelector = null)
+        Func<ClusterLabelRequest, string?>? clusterLabelSelector = null,
+        GalaxyMapProfileWorkspaceStore? profileWorkspaceStore = null,
+        GalaxyMapModuleProfileStore? profileStore = null,
+        GalaxyMapTlkService? tlkService = null,
+        MELocalization baseGameTlkLocale = MELocalization.INT,
+        Action<MELocalization>? saveBaseGameLocale = null)
     {
         _loader = loader;
         _textures = textures ?? new GalaxyMapTextureService();
         _workspaceStore = workspaceStore ?? new GalaxyMapWorkspaceStore();
+        _usesPccModules = workspaceStore is null || profileWorkspaceStore is not null;
+        var activeProfileWorkspaceStore = _usesPccModules
+            ? profileWorkspaceStore ?? new GalaxyMapProfileWorkspaceStore()
+            : null;
+        var activeProfileStore = profileStore ?? new GalaxyMapModuleProfileStore();
+        _tlkService = tlkService ?? new GalaxyMapTlkService();
+        _baseGameTlkLocale = GalaxyMapModule.SupportedTlkLocales.Contains(baseGameTlkLocale)
+            ? baseGameTlkLocale
+            : MELocalization.INT;
+        _saveBaseGameLocale = saveBaseGameLocale;
+        _tlkService.Reload();
         _dialogs = dialogs ?? new WpfEditorDialogs(
-            editTargetSelector, confirmAction, shaderNameSelector, commitReviewAction, clusterLabelSelector);
+            editTargetSelector,
+            confirmAction,
+            shaderNameSelector,
+            commitReviewAction,
+            clusterLabelSelector,
+            _tlkService,
+            () => ActiveModule);
         _commitPreviewBuilder = new CommitPreviewBuilder(_manifestStore);
         _validation = new ValidationCoordinator(deferredScheduler ?? new DispatcherDeferredScheduler());
         _validation.Completed += ValidationOnCompleted;
-        _edits = new EditSessionService(_session, manifestStore: _manifestStore);
+        _edits = new EditSessionService(
+            _session,
+            manifestStore: _manifestStore,
+            profileStore: activeProfileStore);
         _workspaceWorkflows = new WorkspaceWorkflowService(
             _session,
             _edits,
             _loader,
             _manifestStore,
-            _workspaceStore);
+            _workspaceStore,
+            activeProfileWorkspaceStore,
+            activeProfileStore);
         _relay = new RelayWorkflow(_session, _edits);
         _relay.StateChanged += RelayStateOnChanged;
         _clusterTextures = new ClusterTextureWorkflow(_session, _edits, _textures);
@@ -89,7 +124,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         TableViewer = new TableViewerViewModel(
             new TableProjectionService(_session),
             ApplyTableCellEdit,
-            () => Workspace?.Modules.Any(module => !module.IsReadOnly && !module.IsBaseGame) == true);
+            () => Workspace?.Modules.Any(module => !module.IsReadOnly && !module.IsBaseGame) == true,
+            _tlkService,
+            ResolveTlkLocale);
         _rowAuthoring = new RowAuthoringWorkflow(_session, _edits, _inspectorEdits);
         _planetDesigner = new PlanetDesignerWorkflow(_session, _edits);
         _session.Changed += SessionOnChanged;
@@ -100,7 +137,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             BeginUserEdit,
             _inspectorEdits.ValidateEdit,
             ApplyManagedInspectorEdit,
-            ExecuteInspectorAction));
+            ExecuteInspectorAction), _tlkService, ResolveTlkLocale);
         _navigation = new HierarchyNavigationCoordinator(
             _session,
             Inspector,
@@ -124,6 +161,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RefreshRememberedWorkspaceCommand = new RelayCommand(
             () => RefreshRememberedWorkspace(),
             () => HasDocument);
+        ConfigureBaseGameCommand = new RelayCommand(ConfigureBaseGame);
         DismissErrorCommand = new RelayCommand(
             () => ErrorMessage = string.Empty,
             () => HasError);
@@ -212,6 +250,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ? "No active authoring module"
         : ActiveModule.Name;
     public ModuleColor ActiveModuleColor => ActiveModule?.Color ?? ModuleColor.BaseGameBlue;
+    public MELocalization BaseGameTlkLocale
+    {
+        get => _baseGameTlkLocale;
+        private set
+        {
+            if (SetProperty(ref _baseGameTlkLocale, value))
+            {
+                OnPropertyChanged(nameof(BaseGameToolTip));
+            }
+        }
+    }
+    public string BaseGameToolTip => $"Click to configure BASEGAME settings (TLK locale: {BaseGameTlkLocale})";
     public object? CurrentViewModel => _navigation.CurrentViewModel;
 
     public bool HasContextualAddAction => CurrentViewModel is GalaxyViewModel or ClusterViewModel or SystemViewModel;
@@ -321,6 +371,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand CreateModuleCommand { get; }
     public RelayCommand OpenModuleCommand { get; }
     public RelayCommand RefreshRememberedWorkspaceCommand { get; }
+    public RelayCommand ConfigureBaseGameCommand { get; }
     public RelayCommand DismissErrorCommand { get; }
     public RelayCommand AddClusterCommand { get; }
     public RelayCommand AddSystemCommand { get; }
@@ -349,6 +400,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         Workspace = _session.Workspace;
+        _tlkService.Reload(Workspace!.Modules);
         AttachWorkspace(Workspace!, result.Message);
         ErrorMessage = string.Empty;
         return true;
@@ -389,7 +441,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _navigation.RestoreInspectionState(null, false);
         }
         Workspace = _session.Workspace;
-        AttachWorkspace(Workspace, result.Message);
+        var currentWorkspace = Workspace!;
+        _tlkService.Reload(currentWorkspace.Modules);
+        AttachWorkspace(currentWorkspace, result.Message);
         ErrorMessage = result.Error ?? string.Empty;
         return result.Succeeded;
     }
@@ -436,6 +490,49 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return ApplyWorkspaceResult(result);
     }
 
+    private void ConfigureBaseGame()
+    {
+        if (_dialogs.ConfigureBaseGameLocale(BaseGameTlkLocale) is not { } locale ||
+            locale == BaseGameTlkLocale)
+        {
+            return;
+        }
+
+        BaseGameTlkLocale = locale;
+        _saveBaseGameLocale?.Invoke(locale);
+        if (_navigation.SelectedRow is { } selectedRow)
+        {
+            Inspector.Inspect(selectedRow);
+        }
+        TableViewer.Invalidate();
+        if (IsTableViewVisible)
+        {
+            TableViewer.RefreshIfNeeded();
+        }
+        StatusMessage = $"BASEGAME TLK locale changed to {locale}.";
+    }
+
+    private MELocalization ResolveTlkLocale(GalaxyMapModule module)
+        => module.IsBaseGame ? BaseGameTlkLocale : module.TlkLocale;
+
+    public bool CreatePccModule(
+        string destinationPackagePath,
+        ModuleColor color,
+        ModuleIdReservations reservations,
+        MELocalization tlkLocale = MELocalization.INT,
+        IReadOnlyList<string>? resourcePackagePaths = null,
+        string? displayName = null)
+    {
+        var result = _workspaceWorkflows.CreatePccModule(
+            destinationPackagePath,
+            color,
+            reservations,
+            tlkLocale,
+            resourcePackagePaths,
+            displayName);
+        return ApplyWorkspaceResult(result);
+    }
+
     public bool MountReadOnlyModule(
         string folderPath,
         string name,
@@ -457,6 +554,39 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void CreateModuleDialog()
     {
+        if (_usesPccModules)
+        {
+            var destination = _dialogs.PickNewModulePackage();
+            if (destination is null)
+            {
+                return;
+            }
+            var cookedDirectory = Path.GetDirectoryName(destination) ?? string.Empty;
+            var dlcDirectory = Directory.GetParent(cookedDirectory);
+            var dlcName = dlcDirectory?.Name ?? "Galaxy Map Module";
+            var autoLoadPath = dlcDirectory is null ? string.Empty : Path.Combine(dlcDirectory.FullName, "AutoLoad.ini");
+            var autoLoad = File.Exists(autoLoadPath) ? new AutoloadIni(autoLoadPath) : null;
+            var setupResult = _dialogs.ConfigureModule(new ModuleSetupDialogRequest(
+                SelectParentFolder: false,
+                FolderPath: destination,
+                SuggestedName: string.IsNullOrWhiteSpace(autoLoad?.ModName) ? dlcName : autoLoad.ModName,
+                SuggestedTag: dlcName,
+                SuggestedReservations: WorkspaceWorkflowService.DefaultReservations(),
+                SuggestedLoadOrder: autoLoad?.ModMount ?? 0,
+                IdentityReadOnly: true));
+            if (setupResult is not null)
+            {
+                CreatePccModule(
+                    destination,
+                    setupResult.Color,
+                    setupResult.Reservations,
+                    setupResult.TlkLocale,
+                    setupResult.ResourcePackagePaths,
+                    setupResult.Name);
+            }
+            return;
+        }
+
         var parent = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         var result = _dialogs.ConfigureModule(new ModuleSetupDialogRequest(
             SelectParentFolder: true,
@@ -473,11 +603,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void OpenModuleDialog()
     {
-        var folder = _dialogs.PickModuleFolder();
-        if (folder is null)
+        var selectedPath = _dialogs.PickModuleFolder();
+        if (selectedPath is null)
         {
             return;
         }
+
+        if (_usesPccModules)
+        {
+            OpenExistingModule(selectedPath);
+            return;
+        }
+
+        var folder = selectedPath;
 
         if (File.Exists(Path.Combine(folder, GalaxyMapModuleManifestStore.FileName)))
         {
@@ -515,7 +653,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         var result = _dialogs.ConfigureModule(new ModuleSetupDialogRequest(
             SelectParentFolder: false,
-            FolderPath: module.FolderPath,
+            FolderPath: module.GalaxyMapPackagePath ?? module.FolderPath,
             SuggestedName: module.Name,
             SuggestedTag: module.Tag,
             SuggestedReservations: module.Reservations,
@@ -525,7 +663,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             CanSetActive: !module.IsReadOnly,
             IsActive: ReferenceEquals(module, ActiveModule),
             SetActiveAction: () => SetActiveModule(module),
-            UnlinkAction: () => UnlinkModule(module)));
+            UnlinkAction: () => UnlinkModule(module),
+            IdentityReadOnly: module.IsPccBacked,
+            SuggestedTlkLocale: module.TlkLocale,
+            SuggestedResourcePackages: module.ResourcePackagePaths,
+            ForgetAction: module.IsPccBacked ? () => ForgetModule(module) : null));
         if (result is null)
         {
             return;
@@ -533,7 +675,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            UpdateModuleMetadata(module, result.Name, result.Tag, result.Color, result.LoadOrder, result.Reservations);
+            UpdateModuleMetadata(
+                module,
+                result.Name,
+                result.Tag,
+                result.Color,
+                result.LoadOrder,
+                result.Reservations,
+                result.TlkLocale,
+                result.ResourcePackagePaths);
         }
         catch (Exception exception) when (IsExpectedOperationFailure(exception))
         {
@@ -587,6 +737,35 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _navigation.RestoreInspectionState(null, false);
         }
 
+        _tlkService.Reload(Workspace?.Modules);
+        RefreshWorkspace(null, ViewContext.Galaxy, result.Message);
+        NotifyPendingChanges();
+        ErrorMessage = string.Empty;
+        return true;
+    }
+
+    public bool ForgetModule(GalaxyMapModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        if (!module.IsPccBacked)
+        {
+            return Fail("Only PCC-backed module profiles can be forgotten.");
+        }
+        if (!Confirm(
+                $"Forget {module.Name} [{module.Tag}]? This removes it from the workspace and deletes its " +
+                "LE1 Galaxy Map Editor profile. The DLC and every PCC remain untouched."))
+        {
+            StatusMessage = "Forget module cancelled.";
+            return false;
+        }
+
+        var result = _workspaceWorkflows.ForgetModule(module);
+        if (!result.Succeeded)
+        {
+            return Fail(result.Error ?? result.Message);
+        }
+
+        _tlkService.Reload(Workspace?.Modules);
         RefreshWorkspace(null, ViewContext.Galaxy, result.Message);
         NotifyPendingChanges();
         ErrorMessage = string.Empty;
@@ -599,7 +778,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         string tag,
         ModuleColor color,
         int loadOrder,
-        ModuleIdReservations reservations)
+        ModuleIdReservations reservations,
+        MELocalization? tlkLocale = null,
+        IReadOnlyList<string>? resourcePackagePaths = null)
     {
         var oldTag = module.Tag;
         var result = _workspaceWorkflows.UpdateModuleMetadata(
@@ -609,7 +790,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             color,
             loadOrder,
             reservations,
-            CaptureHistoryPresentation());
+            CaptureHistoryPresentation(),
+            tlkLocale,
+            resourcePackagePaths);
         if (!result.Succeeded)
         {
             return Fail(result.Error ?? result.Message);
@@ -844,7 +1027,22 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             ResolvePlanetForDesigner,
             request => LinkPlanetTexture(designer, request),
             ResolvePlanetPreviewTexture,
-            unlinkTexture: (moduleTag, linkId) => UnlinkPlanetTexture(designer, moduleTag, linkId));
+            unlinkTexture: (moduleTag, linkId) => UnlinkPlanetTexture(designer, moduleTag, linkId),
+            packageTextureOptions: () => _textures
+                .GetPlanetPackageTextureOptions(EffectiveTextureModules(), ReferencedPlanetTexturePaths())
+                .Select(texture => texture.InMemoryPath)
+                .ToArray(),
+            resolvePreviewTextures: ResolvePlanetPreviewTextures);
+    }
+
+    public void WarmPlanetPreviewTextures()
+    {
+        lock (_planetTextureWarmupLock)
+        {
+            _planetTextureWarmupTask ??= Task.Run(() => _textures.GetPackageTextureData(
+                [],
+                VanillaPlanetTextureReferences()));
+        }
     }
 
     private Planet? ResolvePlanetForDesigner(GalaxyMapRowKey key, string? moduleTag)
@@ -985,6 +1183,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 HasError ? ErrorMessage : "Planet texture link cancelled; no writable module was selected.",
                 designer.Key);
         }
+        if (target.IsPccBacked)
+        {
+            return WorkflowResult.Failure(
+                "Loose Planet texture links are not used by PCC modules. Register a resource PCC instead.",
+                designer.Key);
+        }
 
         var result = _planetTextures.Stage(
             planet,
@@ -1039,9 +1243,103 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource? ResolvePlanetPreviewTexture(string inMemoryPath)
     {
         var source = _planetTextures.ResolvePreview(inMemoryPath);
-        return source is null
+        if (source is not null)
+        {
+            return new LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource(source.CacheKey, source.Contents);
+        }
+        if (Workspace is null)
+        {
+            return null;
+        }
+
+        var packageData = _textures.GetPackageTextureData(EffectiveTextureModules(), inMemoryPath);
+        return packageData is null
             ? null
-            : new LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource(source.CacheKey, source.Contents);
+            : new LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource(
+                packageData.CacheKey,
+                packageData.Contents);
+    }
+
+    private IReadOnlyDictionary<string, LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource>
+        ResolvePlanetPreviewTextures(IEnumerable<string> inMemoryPaths)
+    {
+        Task? warmup;
+        lock (_planetTextureWarmupLock)
+        {
+            warmup = _planetTextureWarmupTask;
+        }
+        warmup?.GetAwaiter().GetResult();
+
+        var references = inMemoryPaths
+            .Where(reference => !string.IsNullOrWhiteSpace(reference))
+            .Select(reference => reference.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var result = new Dictionary<string, LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var reference in references)
+        {
+            if (_planetTextures.ResolvePreview(reference) is { } linked)
+            {
+                result[reference] = new LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource(
+                    linked.CacheKey,
+                    linked.Contents);
+            }
+        }
+
+        if (Workspace is null)
+        {
+            return result;
+        }
+        var packageData = _textures.GetPackageTextureData(
+            EffectiveTextureModules(),
+            references.Where(reference => !result.ContainsKey(reference)));
+        foreach (var (reference, data) in packageData)
+        {
+            result[reference] = new LE1GalaxyMapEditor.Rendering.PlanetPreviewTextureSource(
+                data.CacheKey,
+                data.Contents);
+        }
+        var unresolvedVanilla = references.Where(reference =>
+                reference.StartsWith("BIOA_GXM10_T.GXM_", StringComparison.OrdinalIgnoreCase) &&
+                !result.ContainsKey(reference))
+            .ToArray();
+        if (unresolvedVanilla.Length > 0)
+        {
+            var diagnostics = _textures.PackageTextureDiagnostics.Count == 0
+                ? "No package diagnostic was reported."
+                : string.Join(" ", _textures.PackageTextureDiagnostics);
+            throw new InvalidOperationException(
+                $"Vanilla planet textures were not resolved: {string.Join(", ", unresolvedVanilla)}. {diagnostics}");
+        }
+        return result;
+    }
+
+    private static IReadOnlyList<string> VanillaPlanetTextureReferences() =>
+        PlanetAppearanceSchema.Properties
+            .SelectMany(property => property.TextureOptions ?? [])
+            .Append("BIOA_GXM10_T.GXM_CoronaGradient")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private IReadOnlyList<string> ReferencedPlanetTexturePaths()
+    {
+        if (Workspace is null)
+        {
+            return [];
+        }
+
+        var textureColumns = PlanetAppearanceSchema.Properties
+            .Where(property => property.Editor == PlanetAppearanceEditorKind.Texture)
+            .SelectMany(property => property.Columns)
+            .ToArray();
+        return Workspace.Layers
+            .SelectMany(layer => layer.Planets)
+            .SelectMany(planet => textureColumns.Select(column => planet.ExtraFields.GetValueOrDefault(column)))
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private bool UndoPlanetDesigner(GalaxyMapRowKey key)
@@ -1548,6 +1846,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         Workspace = _session.Workspace;
         var navigation = result.Navigation ?? NavigationTarget.Galaxy;
+        _tlkService.Reload(Workspace.Modules);
         RefreshWorkspace(
             result.SelectionKey,
             new ViewContext(navigation.ClusterRowId, navigation.SystemRowId),
@@ -1652,6 +1951,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        if (target.IsPccBacked)
+        {
+            Fail("Loose Cluster texture links are not used by PCC modules. Reference a Texture2D export instead.");
+            return;
+        }
+
         if (_dialogs.PickClusterTexture() is { } sourcePath)
         {
             StageClusterTexture(cluster, target, sourcePath);
@@ -1660,6 +1965,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public bool StageClusterTexture(Cluster cluster, GalaxyMapModule target, string sourcePath)
     {
+        if (target.IsPccBacked)
+        {
+            return Fail("Loose Cluster texture links are not used by PCC modules.");
+        }
+
         var result = _clusterTextures.Stage(
             cluster,
             target,
@@ -1709,7 +2019,27 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return moduleTexture;
         }
 
+        var packageModule = source.Module ?? cluster.Origin?.Module ?? GalaxyMapModule.BaseGame;
+        if (_textures.GetPackageTexture(EffectiveTextureModules(packageModule), source.Background) is { } packageTexture)
+        {
+            return packageTexture;
+        }
+
         return _textures.GetClusterTexture(source.Background);
+    }
+
+    private IReadOnlyList<GalaxyMapModule> EffectiveTextureModules(GalaxyMapModule? preferred = null)
+    {
+        var modules = Workspace?.Modules.Where(module => module.IsPccBacked)
+            .OrderByDescending(module => module.LoadOrder)
+            .ThenByDescending(module => module.Tag, StringComparer.OrdinalIgnoreCase)
+            .ToList() ?? [];
+        if (preferred is { IsPccBacked: true })
+        {
+            modules.RemoveAll(module => ReferenceEquals(module, preferred));
+            modules.Insert(0, preferred);
+        }
+        return modules;
     }
 
     private void AddPlotPlanet(Planet planet)

@@ -5,20 +5,26 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="LegendaryExplorerCore">
+      <HintPath>..\..\src\LE1GalaxyMapEditor\lib\LegendaryExplorerCore\LegendaryExplorerCore.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Content Include="..\..\src\LE1GalaxyMapEditor\lib\LegendaryExplorerCore\CompressionWrappers.dll"
+             Link="CompressionWrappers.dll" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\LE1GalaxyMapEditor\lib\LegendaryExplorerCore\TexConverter.dll"
+             Link="TexConverter.dll" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\LE1GalaxyMapEditor\lib\LegendaryExplorerCore\ISACTTools.dll"
+             Link="ISACTTools.dll" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\LE1GalaxyMapEditor\LE1GalaxyMapEditor.csproj" />
     <!-- Project-reference content is not copied transitively. Mirror the deployed
          resource layout so headless tests exercise the same external-file path as
          the installed application. -->
-    <None Include="..\..\src\LE1GalaxyMapEditor\resources\data\*.csv"
-          Link="resources\data\%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\src\LE1GalaxyMapEditor\resources\textures\*.jpg"
-          Link="resources\textures\%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\src\LE1GalaxyMapEditor\resources\textures\*.png"
-          Link="resources\textures\%(Filename)%(Extension)"
+    <None Include="..\..\src\LE1GalaxyMapEditor\resources\data\GXM_2DA_Template.pcc"
+          Link="resources\data\GXM_2DA_Template.pcc"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\src\LE1GalaxyMapEditor\resources\planet-designer\**\*"
           Link="resources\planet-designer\%(RecursiveDir)%(Filename)%(Extension)"

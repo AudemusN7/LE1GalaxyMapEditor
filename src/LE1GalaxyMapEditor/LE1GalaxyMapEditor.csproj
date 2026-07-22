@@ -6,24 +6,57 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
     <ApplicationIcon>resources\branding\icon.ico</ApplicationIcon>
     <AssemblyName>LE1GalaxyMapEditor</AssemblyName>
     <RootNamespace>LE1GalaxyMapEditor</RootNamespace>
-    <Version>1.2.0</Version>
-    <AssemblyVersion>1.2.0.0</AssemblyVersion>
-    <FileVersion>1.2.0.0</FileVersion>
+    <Version>1.2.1</Version>
+    <AssemblyVersion>1.2.1.0</AssemblyVersion>
+    <FileVersion>1.2.1.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Large, replaceable map assets remain beside the executable instead of
-         inflating the assembly and antivirus scan surface. -->
-    <None Update="resources\data\*.csv"
+    <Reference Include="LegendaryExplorerCore">
+      <HintPath>lib\LegendaryExplorerCore\LegendaryExplorerCore.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+
+    <None Update="lib\LegendaryExplorerCore\LegendaryExplorerCore.pdb"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
-    <None Update="resources\textures\*.jpg"
+    <Content Include="lib\LegendaryExplorerCore\CompressionWrappers.dll"
+          TargetPath="CompressionWrappers.dll"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
-    <None Update="resources\textures\*.png"
+    <Content Include="lib\LegendaryExplorerCore\TexConverter.dll"
+          TargetPath="TexConverter.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="lib\LegendaryExplorerCore\ISACTTools.dll"
+          TargetPath="ISACTTools.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BCnEncoder.Net" Version="2.2.1" />
+    <PackageReference Include="BCnEncoder.Net.ImageSharp" Version="1.1.2" />
+    <PackageReference Include="CommunityToolkit.Diagnostics" Version="8.4.0" />
+    <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" Version="3.0.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Serilog" Version="4.3.0" />
+    <PackageReference Include="SharpDX.D3DCompiler" Version="4.2.0" />
+    <PackageReference Include="SharpGLTF.Toolkit" Version="1.0.6" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="resources\data\GalaxyMap_*.csv" />
+    <EmbeddedResource Include="resources\data\GalaxyMap_*.csv"
+                      LogicalName="LE1GalaxyMapEditor.Resources.Data.%(Filename)%(Extension)" />
+    <None Update="resources\data\GXM_2DA_Template.pcc"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
     <None Update="resources\planet-designer\**\*"

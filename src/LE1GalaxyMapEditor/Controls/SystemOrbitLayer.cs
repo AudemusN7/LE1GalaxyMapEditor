@@ -1,7 +1,6 @@
 using System.Collections;
 using System.Windows;
 using System.Windows.Media;
-using LE1GalaxyMapEditor.Converters;
 using LE1GalaxyMapEditor.Models;
 
 namespace LE1GalaxyMapEditor.Controls;
@@ -58,9 +57,8 @@ public sealed class SystemOrbitLayer : FrameworkElement
             {
                 var alpha = planet.OrbitRing == 1 ? (byte)65 : (byte)105;
                 var thickness = planet.OrbitRing == 1 ? 1d : 1.5d;
-                var color = GetModuleColor(planet);
                 var pen = new Pen(
-                    new SolidColorBrush(Color.FromArgb(alpha, color.R, color.G, color.B)),
+                    new SolidColorBrush(Color.FromArgb(alpha, 0xFF, 0xFF, 0xFF)),
                     thickness);
                 drawingContext.DrawEllipse(null, pen, centre, radius, radius);
             }
@@ -101,9 +99,6 @@ public sealed class SystemOrbitLayer : FrameworkElement
                 size * 0.75);
         }
     }
-
-    private static Color GetModuleColor(GalaxyMapRow row)
-        => ModuleColorPalette.GetColor(row.Origin?.Color ?? ModuleColor.BaseGameBlue);
 
     private static Brush CreateBrush(Color color)
     {

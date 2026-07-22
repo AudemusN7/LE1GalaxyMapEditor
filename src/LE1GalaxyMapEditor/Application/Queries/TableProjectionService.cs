@@ -17,6 +17,7 @@ public sealed record MergedTableCell(
     object? RawValue,
     string EffectiveModuleTag,
     ModuleColor EffectiveModuleColor,
+    GalaxyMapModule EffectiveModule,
     bool IsStaged,
     bool DiffersFromLowerInstance,
     IReadOnlyList<CellInstanceValue> OverrideChain);
@@ -97,6 +98,7 @@ public sealed class TableProjectionService(EditorSession session)
                 rawValue,
                 winningModule.Tag,
                 winningModule.Color,
+                winningModule,
                 tableIsStaged && effectiveRow.CsvSnapshot?.IsDirty(column.Name) == true,
                 differs,
                 instances);
@@ -121,6 +123,7 @@ public sealed class TableProjectionService(EditorSession session)
                     raw,
                     module.Tag,
                     module.Color,
+                    module,
                     IsStaged: false,
                     DiffersFromLowerInstance: false,
                     [instance]);

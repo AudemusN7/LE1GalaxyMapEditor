@@ -54,13 +54,13 @@ public static class PlanetAppearanceSchema
 
         new("ContinentMask01", "Primary mask", "Continent / Landmass", PlanetAppearanceEditorKind.Texture,
             "Texture reference whose channels define the primary landmass masks.",
-            TextureOptions: ["GXM_ContinentMask01", "GXM_Atmosphere02", "GXM_ContinentMask04"]),
+            TextureOptions: ["BIOA_GXM10_T.GXM_ContinentMask01", "BIOA_GXM10_T.GXM_Atmosphere02", "BIOA_GXM10_T.GXM_ContinentMask04"]),
         new("ContinentMask02", "Secondary mask", "Continent / Landmass", PlanetAppearanceEditorKind.Texture,
             "Texture reference supplying additional land and variation masks.",
-            TextureOptions: ["GXM_DiffuseMask01", "GXM_ContinentMask02"]),
+            TextureOptions: ["BIOA_GXM10_T.GXM_DiffuseMask01", "BIOA_GXM10_T.GXM_ContinentMask02"]),
         new("Continent_Texture", "Surface texture", "Continent / Landmass", PlanetAppearanceEditorKind.Texture,
             "Detail texture mixed across the land surface.",
-            TextureOptions: ["GXM_DiffuseMask01"]),
+            TextureOptions: ["BIOA_GXM10_T.GXM_DiffuseMask01"]),
         new("Continent_Color", "Continent colour", "Continent / Landmass", PlanetAppearanceEditorKind.ColorVector,
             "Primary HDR colour applied to land."),
         new("Continent_Color_Alt", "Alternate colour", "Continent / Landmass", PlanetAppearanceEditorKind.ColorVector,
@@ -80,7 +80,7 @@ public static class PlanetAppearanceSchema
 
         new("Normal_Map", "Normal map", "Normals", PlanetAppearanceEditorKind.Texture,
             "Surface normal texture. Package-qualified references are preserved exactly.",
-            TextureOptions: ["GXM_PlanetNormal01", "GXM_PlanetNormal02"]),
+            TextureOptions: ["BIOA_GXM10_T.GXM_PlanetNormal01", "BIOA_GXM10_T.GXM_PlanetNormal02"]),
         new("Normal_Map_Tile", "Normal tiling", "Normals", PlanetAppearanceEditorKind.Scalar,
             "UV repeat applied to the normal map.", 0, 2, 0.1),
         new("Bump_Amount", "Bump amount", "Normals", PlanetAppearanceEditorKind.Scalar,
@@ -88,7 +88,7 @@ public static class PlanetAppearanceSchema
 
         new("Ocean_Texture", "Surface texture", "Ocean", PlanetAppearanceEditorKind.Texture,
             "Detail texture mixed across the ocean surface.",
-            TextureOptions: ["GXM_DiffuseMask01"]),
+            TextureOptions: ["BIOA_GXM10_T.GXM_DiffuseMask01"]),
         new("Ocean_Color", "Ocean colour", "Ocean", PlanetAppearanceEditorKind.ColorVector,
             "Primary HDR colour applied to oceans."),
         new("Ocean_Color_Alt", "Alternate colour", "Ocean", PlanetAppearanceEditorKind.ColorVector,
@@ -104,7 +104,7 @@ public static class PlanetAppearanceSchema
 
         new("City_Emissive", "Emissive mask", "City Emissive", PlanetAppearanceEditorKind.Texture,
             "Night-side emissive mask used for city lights.",
-            TextureOptions: ["GXM_ContinentMask02", "GXM_ContinentMask03"]),
+            TextureOptions: ["BIOA_GXM10_T.GXM_ContinentMask02", "BIOA_GXM10_T.GXM_ContinentMask03"]),
         new("City_Emissive_Color", "Emissive colour", "City Emissive", PlanetAppearanceEditorKind.ColorVector,
             "HDR RGBA colour of night-side city lights."),
         new("City_Emissive_Mixer", "Mask channels", "City Emissive", PlanetAppearanceEditorKind.MixerVector,
@@ -117,7 +117,7 @@ public static class PlanetAppearanceSchema
 
         new("AtmosphereMaster", "Atmosphere mask", "Atmosphere / Horizon", PlanetAppearanceEditorKind.Texture,
             "Texture controlling the moving atmosphere layer.",
-            TextureOptions: ["GXM_Atmosphere01", "GXM_Atmosphere02", "GXM_Atmosphere03", "GXM_ContinentMask04", "GXM_DiffuseMask01"]),
+            TextureOptions: ["BIOA_GXM10_T.GXM_Atmosphere01", "BIOA_GXM10_T.GXM_Atmosphere02", "BIOA_GXM10_T.GXM_Atmosphere03", "BIOA_GXM10_T.GXM_ContinentMask04", "BIOA_GXM10_T.GXM_DiffuseMask01"]),
         new("Atmosphere_Color", "Atmosphere colour", "Atmosphere / Horizon", PlanetAppearanceEditorKind.ColorVector,
             "HDR RGBA multiplier for the atmosphere texture."),
         new("Atmosphere_Mixer", "Atmosphere channels", "Atmosphere / Horizon", PlanetAppearanceEditorKind.MixerVector,
@@ -164,6 +164,20 @@ public static class PlanetAppearanceSchema
         .ToArray();
 
     private static readonly HashSet<string> ColumnSet = new(Columns, StringComparer.OrdinalIgnoreCase);
+    private static readonly HashSet<string> TextureObjectSet = new(
+        Properties.SelectMany(property => property.TextureOptions ?? [])
+            .Select(PlanetAppearanceCodec.TextureDisplayName),
+        StringComparer.OrdinalIgnoreCase);
 
     public static bool IsAppearanceColumn(string column) => ColumnSet.Contains(column);
+
+    public static bool IsSupportedTextureObject(string objectName)
+        => !string.IsNullOrWhiteSpace(objectName) && TextureObjectSet.Contains(objectName.Trim());
+
+    public static bool IsSelectablePlanetTextureObject(
+        string objectName,
+        bool isCustomResourceTexture,
+        bool isReferencedByPlanet)
+        => !string.IsNullOrWhiteSpace(objectName) &&
+           (IsSupportedTextureObject(objectName) || isCustomResourceTexture && isReferencedByPlanet);
 }

@@ -1,8 +1,10 @@
 using System.ComponentModel;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Numerics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -21,7 +23,11 @@ public partial class PlanetDesignerWindow : Window
     private readonly DispatcherTimer _resizeTimer;
     private readonly Stopwatch _animationClock = new();
     private readonly PlanetDesignerWindowDiagnostics _diagnostics = new();
-    private readonly Dictionary<string, PlanetPreviewTextureSource> _previewTextureSources =
+    private readonly ConcurrentDictionary<string, PlanetPreviewTextureSource> _previewTextureSources =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _pendingPreviewTextures =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _unavailablePreviewTextures =
         new(StringComparer.OrdinalIgnoreCase);
     private PlanetPreviewRenderer? _renderer;
     private WriteableBitmap? _previewBitmap;
@@ -140,10 +146,14 @@ public partial class PlanetDesignerWindow : Window
         var target = GetPreviewResolution();
         var initialKey = ViewModel.PlanetKey;
         var material = ViewModel.CreateRenderMaterial();
-        CachePreviewTextureSources(material);
         var options = ViewModel.CreatePreviewOptions();
         try
         {
+            if (!await CachePreviewTextureSourcesAsync(material) || _closed)
+            {
+                return;
+            }
+
             var initialized = await Task.Run(() =>
             {
                 var renderer = new PlanetPreviewRenderer(
@@ -347,7 +357,7 @@ public partial class PlanetDesignerWindow : Window
             _lastClockTime = now;
 
             var material = ViewModel.CreateRenderMaterial();
-            CachePreviewTextureSources(material);
+            _ = CachePreviewTextureSourcesAsync(material);
             var frame = _renderer.Render(
                 material,
                 ViewModel.CreatePreviewOptions(),
@@ -381,31 +391,89 @@ public partial class PlanetDesignerWindow : Window
         _diagnostics.RecordFramePresented();
     }
 
-    private void CachePreviewTextureSources(PlanetRenderMaterial material)
+    private async Task<bool> CachePreviewTextureSourcesAsync(PlanetRenderMaterial material)
     {
-        string[] references =
-        [
-            material.NormalMap,
-            material.CityEmissive,
-            material.ContinentMask01,
-            material.ContinentMask02,
-            material.ContinentTexture,
-            material.OceanTexture,
-            material.AtmosphereMaster
-        ];
-        foreach (var reference in references.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(
-                     StringComparer.OrdinalIgnoreCase))
+        var activeReferences = PreviewTextureReferences(material).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var obsolete in _previewTextureSources.Keys.Where(key => !activeReferences.Contains(key)))
         {
-            if (ViewModel.ResolvePreviewTexture(reference) is { } source)
+            _previewTextureSources.TryRemove(obsolete, out _);
+        }
+        foreach (var obsolete in _unavailablePreviewTextures.Keys.Where(key => !activeReferences.Contains(key)))
+        {
+            _unavailablePreviewTextures.TryRemove(obsolete, out _);
+        }
+        var missingReferences = activeReferences.Where(reference =>
+                !_previewTextureSources.ContainsKey(reference) &&
+                !_unavailablePreviewTextures.ContainsKey(reference) &&
+                _pendingPreviewTextures.TryAdd(reference, 0))
+            .ToArray();
+        if (missingReferences.Length == 0)
+        {
+            return true;
+        }
+
+        IReadOnlyDictionary<string, PlanetPreviewTextureSource> resolved;
+        try
+        {
+            var viewModel = ViewModel;
+            resolved = await Task.Run(() => viewModel.ResolvePreviewTextures(missingReferences));
+        }
+        catch (Exception exception)
+        {
+            foreach (var reference in missingReferences)
+            {
+                _pendingPreviewTextures.TryRemove(reference, out _);
+            }
+            if (!_closed)
+            {
+                ViewModel.SetPreviewError(
+                    $"Planet textures could not be loaded: {exception.GetBaseException().Message}");
+            }
+            return false;
+        }
+
+        if (_closed)
+        {
+            return false;
+        }
+        foreach (var reference in missingReferences)
+        {
+            _pendingPreviewTextures.TryRemove(reference, out _);
+            if (resolved.TryGetValue(reference, out var source))
             {
                 _previewTextureSources[reference] = source;
+                _unavailablePreviewTextures.TryRemove(reference, out _);
             }
             else
             {
-                _previewTextureSources.Remove(reference);
+                _previewTextureSources.TryRemove(reference, out _);
+                _unavailablePreviewTextures[reference] = 0;
             }
         }
+        SchedulePreview();
+        return true;
     }
+
+    private static IReadOnlyList<string> PreviewTextureReferences(PlanetRenderMaterial material)
+        => new[]
+            {
+                material.NormalMap,
+                material.CityEmissive,
+                material.ContinentMask01,
+                material.ContinentMask02,
+                material.ContinentTexture,
+                material.OceanTexture,
+                material.AtmosphereMaster,
+                "BIOA_GXM10_T.GXM_PlanetNormal01",
+                "BIOA_GXM10_T.GXM_ContinentMask02",
+                "BIOA_GXM10_T.GXM_ContinentMask01",
+                "BIOA_GXM10_T.GXM_DiffuseMask01",
+                "BIOA_GXM10_T.GXM_Atmosphere01",
+                "BIOA_GXM10_T.GXM_CoronaGradient"
+            }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private void DisposeRenderer(PlanetPreviewRenderer renderer)
     {
@@ -615,22 +683,31 @@ public partial class PlanetDesignerWindow : Window
         if (sender is not FrameworkElement { DataContext: PlanetAppearanceFieldViewModel field }) return;
         var original = field.Primary.Value;
         var dialog = new ColorPickerWindow(field.Primary.Value) { Owner = this };
-        dialog.PreviewColorChanged += value => field.Primary.Value = value;
-        if (dialog.ShowDialog() == true && dialog.Result is { } result)
+        ViewModel.BeginDraftPropertyEdit();
+        try
         {
-            field.Primary.Value = result;
+            dialog.PreviewColorChanged += value => field.Primary.Value = value;
+            if (dialog.ShowDialog() == true && dialog.Result is { } result)
+            {
+                field.Primary.Value = result;
+            }
+            else
+            {
+                field.Primary.Value = original;
+            }
         }
-        else
+        finally
         {
-            field.Primary.Value = original;
+            ViewModel.EndDraftPropertyEdit();
         }
     }
 
     private void HdrColor_OnClick(object sender, RoutedEventArgs eventArgs)
     {
         if (sender is not FrameworkElement { DataContext: PlanetAppearanceFieldViewModel { Components.Count: 4 } field }) return;
-        var values = field.Components.Select(component =>
-            PlanetAppearanceCodec.TryParseFloat(component.Value, out var parsed) ? parsed : 0).ToArray();
+        var originalValues = field.Components.Select(component => component.Value).ToArray();
+        var values = originalValues.Select(value =>
+            PlanetAppearanceCodec.TryParseFloat(value, out var parsed) ? parsed : 0).ToArray();
         var original = new Vector4(values[0], values[1], values[2], values[3]);
         var dialog = new HdrColorPickerWindow(original) { Owner = this };
         void ApplyColor(Vector4 selected)
@@ -641,16 +718,33 @@ public partial class PlanetDesignerWindow : Window
             field.Components[3].Value = PlanetAppearanceCodec.Format(selected.W);
         }
 
-        dialog.PreviewColorChanged += ApplyColor;
-        if (dialog.ShowDialog() == true && dialog.SelectedColor is { } selected)
+        ViewModel.BeginDraftPropertyEdit();
+        try
         {
-            ApplyColor(selected);
+            dialog.PreviewColorChanged += ApplyColor;
+            if (dialog.ShowDialog() == true && dialog.SelectedColor is { } selected)
+            {
+                ApplyColor(selected);
+            }
+            else
+            {
+                for (var index = 0; index < field.Components.Count; index++)
+                {
+                    field.Components[index].Value = originalValues[index];
+                }
+            }
         }
-        else
+        finally
         {
-            ApplyColor(original);
+            ViewModel.EndDraftPropertyEdit();
         }
     }
+
+    private void PropertySlider_OnDragStarted(object sender, DragStartedEventArgs eventArgs) =>
+        ViewModel.BeginDraftPropertyEdit();
+
+    private void PropertySlider_OnDragCompleted(object sender, DragCompletedEventArgs eventArgs) =>
+        ViewModel.EndDraftPropertyEdit();
 
     private void Close_OnClick(object sender, RoutedEventArgs eventArgs) => Close();
 

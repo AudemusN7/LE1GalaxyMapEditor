@@ -1,5 +1,6 @@
 using LE1GalaxyMapEditor.Models;
 using LE1GalaxyMapEditor.Workflows.Queries;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.Workflows.Ports;
 
@@ -15,7 +16,11 @@ public sealed record ModuleSetupDialogRequest(
     bool CanSetActive = false,
     bool IsActive = false,
     Func<bool>? SetActiveAction = null,
-    Func<bool>? UnlinkAction = null);
+    Func<bool>? UnlinkAction = null,
+    bool IdentityReadOnly = false,
+    MELocalization SuggestedTlkLocale = MELocalization.INT,
+    IReadOnlyList<string>? SuggestedResourcePackages = null,
+    Func<bool>? ForgetAction = null);
 
 public sealed record LandableDestinationDefaults(
     string MapName,
@@ -30,7 +35,9 @@ public sealed record ModuleSetupResult(
     ModuleColor Color,
     string FolderPath,
     ModuleIdReservations Reservations,
-    int LoadOrder);
+    int LoadOrder,
+    MELocalization TlkLocale = MELocalization.INT,
+    IReadOnlyList<string>? ResourcePackagePaths = null);
 
 public sealed record LandableDestinationRequest(
     string MapName,
@@ -77,8 +84,10 @@ public sealed record MoveDestinationOption(
 
 public interface IEditorDialogs
 {
+    MELocalization? ConfigureBaseGameLocale(MELocalization currentLocale);
     ModuleSetupResult? ConfigureModule(ModuleSetupDialogRequest request);
     string? PickModuleFolder();
+    string? PickNewModulePackage();
     PlanetCreationRequest? CreatePlanet();
     CloneContentRequest? ConfigureClone(GalaxyMapRow source, int suggestedId, string suggestedLabel);
     GalaxyMapModule? ChooseEditTarget(

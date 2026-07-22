@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.RegularExpressions;
+using LegendaryExplorerCore.Packages;
 
 namespace LE1GalaxyMapEditor.Models;
 
@@ -119,9 +120,15 @@ public sealed partial class GalaxyMapModule
         int loadOrder,
         ModuleIdReservations? reservations = null,
         IReadOnlyDictionary<int, string>? clusterTextureLinks = null,
-        IReadOnlyList<PlanetTextureLink>? planetTextureLinks = null)
+        IReadOnlyList<PlanetTextureLink>? planetTextureLinks = null,
+        string? profileId = null,
+        string? dlcRootPath = null,
+        string? galaxyMapPackagePath = null,
+        MELocalization tlkLocale = MELocalization.INT,
+        IReadOnlyList<string>? resourcePackagePaths = null)
         : this(name, tag, color, folderPath, isReadOnly, loadOrder,
-            reservations ?? ModuleIdReservations.Empty, clusterTextureLinks, planetTextureLinks, isBaseGame: false)
+            reservations ?? ModuleIdReservations.Empty, clusterTextureLinks, planetTextureLinks, isBaseGame: false,
+            profileId, dlcRootPath, galaxyMapPackagePath, tlkLocale, resourcePackagePaths)
     {
     }
 
@@ -135,7 +142,12 @@ public sealed partial class GalaxyMapModule
         ModuleIdReservations reservations,
         IReadOnlyDictionary<int, string>? clusterTextureLinks,
         IReadOnlyList<PlanetTextureLink>? planetTextureLinks,
-        bool isBaseGame)
+        bool isBaseGame,
+        string? profileId = null,
+        string? dlcRootPath = null,
+        string? galaxyMapPackagePath = null,
+        MELocalization tlkLocale = MELocalization.INT,
+        IReadOnlyList<string>? resourcePackagePaths = null)
     {
         Name = RequireValue(name, nameof(name));
         Tag = RequireValue(tag, nameof(tag)).ToUpperInvariant();
@@ -177,6 +189,20 @@ public sealed partial class GalaxyMapModule
                 RequireValue(link.RelativePath, nameof(planetTextureLinks)),
                 link.Categories))
             .ToArray();
+        if (!IsSupportedTlkLocale(tlkLocale))
+        {
+            throw new ArgumentOutOfRangeException(nameof(tlkLocale), "The module TLK locale is not supported.");
+        }
+        ProfileId = string.IsNullOrWhiteSpace(profileId) ? null : profileId.Trim();
+        DlcRootPath = string.IsNullOrWhiteSpace(dlcRootPath) ? null : Path.GetFullPath(dlcRootPath);
+        GalaxyMapPackagePath = string.IsNullOrWhiteSpace(galaxyMapPackagePath)
+            ? null
+            : Path.GetFullPath(galaxyMapPackagePath);
+        TlkLocale = tlkLocale;
+        ResourcePackagePaths = (resourcePackagePaths ?? [])
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         IsBaseGame = isBaseGame;
     }
 
@@ -190,6 +216,12 @@ public sealed partial class GalaxyMapModule
     public IReadOnlyDictionary<int, string> ClusterTextureLinks { get; }
     public IReadOnlyList<PlanetTextureLink> PlanetTextureLinks { get; }
     public bool IsBaseGame { get; }
+    public string? ProfileId { get; }
+    public string? DlcRootPath { get; }
+    public string? GalaxyMapPackagePath { get; }
+    public MELocalization TlkLocale { get; }
+    public IReadOnlyList<string> ResourcePackagePaths { get; }
+    public bool IsPccBacked => GalaxyMapPackagePath is not null;
 
     public GalaxyMapModule With(
         string? name = null,
@@ -198,7 +230,9 @@ public sealed partial class GalaxyMapModule
         int? loadOrder = null,
         ModuleIdReservations? reservations = null,
         IReadOnlyDictionary<int, string>? clusterTextureLinks = null,
-        IReadOnlyList<PlanetTextureLink>? planetTextureLinks = null)
+        IReadOnlyList<PlanetTextureLink>? planetTextureLinks = null,
+        MELocalization? tlkLocale = null,
+        IReadOnlyList<string>? resourcePackagePaths = null)
     {
         if (IsBaseGame)
         {
@@ -214,7 +248,12 @@ public sealed partial class GalaxyMapModule
             loadOrder ?? LoadOrder,
             reservations ?? Reservations,
             clusterTextureLinks ?? ClusterTextureLinks,
-            planetTextureLinks ?? PlanetTextureLinks);
+            planetTextureLinks ?? PlanetTextureLinks,
+            ProfileId,
+            DlcRootPath,
+            GalaxyMapPackagePath,
+            tlkLocale ?? TlkLocale,
+            resourcePackagePaths ?? ResourcePackagePaths);
     }
 
     public override string ToString() => $"{Name} [{Tag}]";
@@ -249,6 +288,23 @@ public sealed partial class GalaxyMapModule
 
     [GeneratedRegex("^[A-Z0-9_-]+$", RegexOptions.CultureInvariant)]
     private static partial Regex TagPattern();
+
+    private static bool IsSupportedTlkLocale(MELocalization locale)
+        => locale is MELocalization.INT or MELocalization.DEU or MELocalization.ESN or
+            MELocalization.FRA or MELocalization.ITA or MELocalization.JPN or
+            MELocalization.POL or MELocalization.RUS;
+
+    public static IReadOnlySet<MELocalization> SupportedTlkLocales { get; } = new HashSet<MELocalization>
+    {
+        MELocalization.INT,
+        MELocalization.DEU,
+        MELocalization.ESN,
+        MELocalization.FRA,
+        MELocalization.ITA,
+        MELocalization.JPN,
+        MELocalization.POL,
+        MELocalization.RUS
+    };
 }
 
 public sealed record GalaxyMapRowOrigin(GalaxyMapModule Module, bool OverridesLowerLayer)

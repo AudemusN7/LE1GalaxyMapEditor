@@ -4,7 +4,10 @@ using LE1GalaxyMapEditor.Services;
 
 namespace LE1GalaxyMapEditor.ViewModels;
 
-public sealed record GalaxyMapPropertyMetadata(string DisplayName, string Description);
+public sealed record GalaxyMapPropertyMetadata(string DisplayName, string Description, bool IsStrRef = false)
+{
+    public Func<string, GalaxyMapStrRefPresentation>? ResolveStrRef { get; init; }
+}
 
 /// <summary>
 /// Human-facing knowledge about the raw 2DA columns. This deliberately keeps
@@ -26,15 +29,15 @@ public static class GalaxyMapPropertyCatalog
             (GalaxyMapTable.Cluster, "LABEL") => new("Label", "Confirmed: internal Cluster01-Cluster99 label. Its numeric suffix × 10,000 is used by Relay endpoints and descendant ActiveWorld IDs."),
             (GalaxyMapTable.System, "LABEL") => new("Label", "Confirmed: internal System01-System09 label. Its numeric suffix × 100 contributes to descendant ActiveWorld IDs and must be unique inside the Cluster."),
             (GalaxyMapTable.Planet, "LABEL") => new("Label", "Confirmed: internal Planet01-Planet99 label. Its numeric suffix contributes directly to ActiveWorld and must be unique inside the System."),
-            (_, "NAME") => new("Name (TLK)", "Confirmed: localised TLK string reference used for the displayed name."),
+            (_, "NAME") => new("Name (TLK)", "Confirmed: localised TLK string reference used for the displayed name.", IsStrRef: true),
             (_, "NAMETEXT") => new("Internal name", "Confirmed: non-localised internal/editor-facing name."),
             (_, "X") => new("Map X", "Confirmed: horizontal position on this map, normally from 0 to 1."),
             (_, "Y") => new("Map Y", "Confirmed: vertical position on this map, normally from 0 to 1."),
             (GalaxyMapTable.System, "CLUSTER") => new("Parent Cluster", "Confirmed: row ID of the Cluster containing this System."),
             (GalaxyMapTable.Planet, "SYSTEM") => new("Parent System", "Confirmed: row ID of the System containing this object."),
             (GalaxyMapTable.Planet, "ACTIVEWORLD") => new("ActiveWorld ID", "Derived: Cluster suffix × 10,000 + System suffix × 100 + Planet suffix. The maximum supported value is 990999; the editor maintains it automatically."),
-            (GalaxyMapTable.Planet, "DESCRIPTION") => new("Description (TLK)", "Confirmed: localised TLK string reference for the object description."),
-            (GalaxyMapTable.Planet, "BUTTONLABEL") => new("Use button (TLK)", "Confirmed: localised TLK string reference for the button used to interact with the object."),
+            (GalaxyMapTable.Planet, "DESCRIPTION") => new("Description (TLK)", "Confirmed: localised TLK string reference for the object description.", IsStrRef: true),
+            (GalaxyMapTable.Planet, "BUTTONLABEL") => new("Use button (TLK)", "Confirmed: localised TLK string reference for the button used to interact with the object.", IsStrRef: true),
             (GalaxyMapTable.Planet, "MAP") => new("Linked Map", "Confirmed: Map-table row ID, or -1 when no destination is linked."),
             (GalaxyMapTable.System, "SCALE") => new("Canvas scale", "Confirmed: size of the navigable System canvas. Vanilla ranges from 0.1 to 2."),
             (GalaxyMapTable.Planet, "SCALE") => new("Object scale", "Confirmed: physical size in System view. Scale is the only structural distinction between ordinary moons, planets and giants."),

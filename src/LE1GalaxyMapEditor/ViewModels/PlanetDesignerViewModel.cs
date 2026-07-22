@@ -105,6 +105,16 @@ public sealed class PlanetAppearanceComponentViewModel : ObservableObject
         }
     }
 
+    public void EnsureTextureReference(string reference)
+    {
+        if (!_textureReference || string.IsNullOrWhiteSpace(reference))
+        {
+            return;
+        }
+
+        _textureReferencesByDisplayName[PlanetAppearanceCodec.TextureDisplayName(reference)] = reference;
+    }
+
     private void Validate()
     {
         ValidationError = _numeric && !PlanetAppearanceCodec.TryParseFloat(Value, out _)
@@ -192,7 +202,8 @@ public sealed class PlanetAppearanceFieldViewModel : ObservableObject
         if (IsTexture && !string.IsNullOrWhiteSpace(Primary.Value) &&
             !TextureOptions.Contains(Primary.Value, StringComparer.OrdinalIgnoreCase))
         {
-            TextureOptions.Add(Primary.RawValue);
+            Primary.EnsureTextureReference(Primary.RawValue);
+            TextureOptions.Add(Primary.Value);
         }
 
         foreach (var component in Components)
@@ -222,9 +233,7 @@ public sealed class PlanetAppearanceFieldViewModel : ObservableObject
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        // Keep the currently displayed value present throughout synchronization.
-        // Clearing a collection bound to an editable ComboBox transiently clears
-        // its Text binding and writes an empty texture reference into the draft.
+        // Keep the current selection present while synchronizing the bound list.
         foreach (var option in options)
         {
             if (!TextureOptions.Contains(option, StringComparer.OrdinalIgnoreCase))
@@ -330,6 +339,7 @@ public enum PlanetDesignerNavigationChoice
 
 public sealed class PlanetDesignerViewModel : ObservableObject
 {
+    private const int MaximumDraftHistoryEntries = 50;
     private static PlanetAppearance? s_appearanceClipboard;
     private static string s_appearanceClipboardSource = string.Empty;
     private readonly Func<GalaxyMapWorkspace?> _workspace;
@@ -343,6 +353,15 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     private readonly Func<PlanetTextureLinkRequest, WorkflowResult> _linkTexture;
     private readonly Func<string, string, WorkflowResult> _unlinkTexture;
     private readonly Func<string, Rendering.PlanetPreviewTextureSource?> _resolvePreviewTexture;
+    private readonly Func<IEnumerable<string>, IReadOnlyDictionary<string, Rendering.PlanetPreviewTextureSource>>
+        _resolvePreviewTextures;
+    private readonly Func<IReadOnlyList<string>> _packageTextureOptions;
+    private IReadOnlyList<string>? _cachedPackageTextureOptions;
+    private readonly Stack<PlanetAppearance> _draftUndo = [];
+    private readonly Stack<PlanetAppearance> _draftRedo = [];
+    private PlanetAppearance _lastDraftSnapshot;
+    private PlanetAppearance? _draftEditStart;
+    private int _draftEditDepth;
     private readonly PlanetAppearanceTemplateStore _templates;
     private IReadOnlyList<PlanetAppearancePreset> _allPresets;
     private string _presetSearch = string.Empty;
@@ -379,6 +398,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
             _ => WorkflowResult.Failure("Planet texture linking is unavailable in this context."),
             _ => null,
             templates,
+            null,
             null)
     {
     }
@@ -395,7 +415,10 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         Func<PlanetTextureLinkRequest, WorkflowResult> linkTexture,
         Func<string, Rendering.PlanetPreviewTextureSource?> resolvePreviewTexture,
         PlanetAppearanceTemplateStore? templates = null,
-        Func<string, string, WorkflowResult>? unlinkTexture = null)
+        Func<string, string, WorkflowResult>? unlinkTexture = null,
+        Func<IReadOnlyList<string>>? packageTextureOptions = null,
+        Func<IEnumerable<string>, IReadOnlyDictionary<string, Rendering.PlanetPreviewTextureSource>>?
+            resolvePreviewTextures = null)
     {
         _workspace = workspace;
         _session = session;
@@ -409,16 +432,28 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         _unlinkTexture = unlinkTexture ?? ((_, _) =>
             WorkflowResult.Failure("Planet texture unlinking is unavailable in this context."));
         _resolvePreviewTexture = resolvePreviewTexture;
+        _resolvePreviewTextures = resolvePreviewTextures ?? (references => references
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(reference => (Reference: reference, Source: resolvePreviewTexture(reference)))
+            .Where(item => item.Source is not null)
+            .ToDictionary(
+                item => item.Reference,
+                item => item.Source!,
+                StringComparer.OrdinalIgnoreCase));
+        _packageTextureOptions = packageTextureOptions ?? (() => []);
         _templates = templates ?? new PlanetAppearanceTemplateStore();
         _allPresets = workspace() is { } currentWorkspace
             ? PlanetAppearancePresetCatalog.Build(currentWorkspace)
             : [];
 
+        _lastDraftSnapshot = session.Draft.Clone();
         Groups = CreateGroups(session.Draft);
         ApplyCommand = new RelayCommand(Apply, CanApply);
         RandomiseCommand = new RelayCommand(Randomise, () => _workspace() is not null);
-        UndoCommand = new RelayCommand(Undo, () => !IsDirty && _canUndo());
-        RedoCommand = new RelayCommand(Redo, () => !IsDirty && _canRedo());
+        UndoCommand = new RelayCommand(Undo,
+            () => _draftEditDepth == 0 && (_draftUndo.Count > 0 || !IsDirty && _canUndo()));
+        RedoCommand = new RelayCommand(Redo,
+            () => _draftEditDepth == 0 && (_draftRedo.Count > 0 || !IsDirty && _canRedo()));
         UseTemplateCommand = new RelayCommand<PlanetAppearanceTemplate>(UseTemplate, template => template is not null);
         DeleteTemplateCommand = new RelayCommand<PlanetAppearanceTemplate>(DeleteTemplate, template => template is not null);
         DismissErrorCommand = new RelayCommand(
@@ -536,6 +571,10 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     public Rendering.PlanetPreviewTextureSource? ResolvePreviewTexture(string inMemoryPath) =>
         _resolvePreviewTexture(inMemoryPath);
 
+    public IReadOnlyDictionary<string, Rendering.PlanetPreviewTextureSource> ResolvePreviewTextures(
+        IEnumerable<string> inMemoryPaths)
+        => _resolvePreviewTextures(inMemoryPaths);
+
     public Rendering.PlanetPreviewOptions CreatePreviewOptions() => new(
         Lit: ShowLighting,
         PointLights: ShowLighting,
@@ -572,6 +611,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         }
 
         _session = new PlanetDesignerSession(planet);
+        ResetDraftHistory();
         Groups = CreateGroups(_session.Draft);
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(PlanetName));
@@ -640,6 +680,35 @@ public sealed class PlanetDesignerViewModel : ObservableObject
     }
 
     public bool TryApply() => ApplyCore();
+
+    public void BeginDraftPropertyEdit()
+    {
+        if (_draftEditDepth++ == 0)
+        {
+            _draftEditStart = _session.Draft.Clone();
+            UndoCommand.RaiseCanExecuteChanged();
+            RedoCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public void EndDraftPropertyEdit()
+    {
+        if (_draftEditDepth == 0 || --_draftEditDepth > 0)
+        {
+            return;
+        }
+
+        if (_draftEditStart is { } start &&
+            PlanetAppearanceCodec.ChangedColumns(start, _session.Draft).Count > 0)
+        {
+            PushDraftHistory(_draftUndo, start);
+            _draftRedo.Clear();
+            _lastDraftSnapshot = _session.Draft.Clone();
+        }
+
+        _draftEditStart = null;
+        RaiseState();
+    }
 
     private void Randomise()
     {
@@ -800,6 +869,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
 
         StatusMessage = result.Message;
         ErrorMessage = string.Empty;
+        ResetDraftHistory();
         OnPropertyChanged(nameof(ModuleTag));
         RefreshFields();
         RefreshPresetCatalog();
@@ -809,11 +879,24 @@ public sealed class PlanetDesignerViewModel : ObservableObject
 
     private void Undo()
     {
+        if (_draftUndo.Count > 0)
+        {
+            RestoreDraft(_draftUndo, _draftRedo, "Undid the last Planet Designer property change.");
+            return;
+        }
+
+        _draftRedo.Clear();
         if (_undo(_session.Key)) ReloadFromWorkspace("Undid the last staged editor change.");
     }
 
     private void Redo()
     {
+        if (_draftRedo.Count > 0)
+        {
+            RestoreDraft(_draftRedo, _draftUndo, "Redid the Planet Designer property change.");
+            return;
+        }
+
         if (_redo(_session.Key)) ReloadFromWorkspace("Redid the staged editor change.");
     }
 
@@ -826,6 +909,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         }
 
         _session.Reload(planet);
+        ResetDraftHistory();
         OnPropertyChanged(nameof(ModuleTag));
         RefreshFields();
         RefreshPresetCatalog();
@@ -855,9 +939,57 @@ public sealed class PlanetDesignerViewModel : ObservableObject
 
     private void AppearanceChanged()
     {
+        if (_draftEditDepth == 0 &&
+            PlanetAppearanceCodec.ChangedColumns(_lastDraftSnapshot, _session.Draft).Count > 0)
+        {
+            PushDraftHistory(_draftUndo, _lastDraftSnapshot);
+            _draftRedo.Clear();
+            _lastDraftSnapshot = _session.Draft.Clone();
+        }
         Validate();
         RaiseState();
         RequestPreview();
+    }
+
+    private void RestoreDraft(
+        Stack<PlanetAppearance> source,
+        Stack<PlanetAppearance> destination,
+        string status)
+    {
+        PushDraftHistory(destination, _session.Draft.Clone());
+        var restored = source.Pop();
+        _session.Draft.ReplaceFrom(restored);
+        _lastDraftSnapshot = restored.Clone();
+        RefreshFields();
+        StatusMessage = status;
+        Validate();
+        RaiseState();
+        RequestPreview();
+    }
+
+    private void ResetDraftHistory()
+    {
+        _draftUndo.Clear();
+        _draftRedo.Clear();
+        _draftEditStart = null;
+        _draftEditDepth = 0;
+        _lastDraftSnapshot = _session.Draft.Clone();
+    }
+
+    private static void PushDraftHistory(Stack<PlanetAppearance> history, PlanetAppearance appearance)
+    {
+        history.Push(appearance.Clone());
+        if (history.Count <= MaximumDraftHistoryEntries)
+        {
+            return;
+        }
+
+        var newestFirst = history.Take(MaximumDraftHistoryEntries).ToArray();
+        history.Clear();
+        for (var index = newestFirst.Length - 1; index >= 0; index--)
+        {
+            history.Push(newestFirst[index]);
+        }
     }
 
     private void Validate()
@@ -935,20 +1067,25 @@ public sealed class PlanetDesignerViewModel : ObservableObject
         }
     }
 
-    private IReadOnlyList<PlanetAppearanceGroupViewModel> CreateGroups(PlanetAppearance appearance) =>
-        PlanetAppearanceSchema.Groups
-            .Select(group => new PlanetAppearanceGroupViewModel(
+    private IReadOnlyList<PlanetAppearanceGroupViewModel> CreateGroups(PlanetAppearance appearance)
+        => PlanetAppearanceSchema.Groups
+            .Select(group =>
+            {
+                var textureOptions = GetModuleTextureOptions(group.Name).ToArray();
+                return new PlanetAppearanceGroupViewModel(
                 group.Name,
                 group.Description,
                 group.ExpandedByDefault,
-                string.Equals(group.Name, "Identity", StringComparison.Ordinal),
+                string.Equals(group.Name, "Identity", StringComparison.Ordinal) &&
+                _workspace()?.Modules.Any(module => !module.IsPccBacked) == true,
                 PlanetAppearanceSchema.Properties
                     .Where(property => property.Group == group.Name)
                     .Select(definition => new PlanetAppearanceFieldViewModel(
                         appearance,
                         definition,
-                        GetModuleTextureOptions(group.Name),
-                        AppearanceChanged)).ToArray()))
+                        textureOptions,
+                        AppearanceChanged)).ToArray());
+            })
             .ToArray();
 
     private IEnumerable<string> GetModuleTextureOptions(string groupName)
@@ -972,6 +1109,7 @@ public sealed class PlanetDesignerViewModel : ObservableObject
             .Where(link => (link.Categories & category) != 0)
             .Where(link => _resolvePreviewTexture(link.InMemoryPath) is not null)
             .Select(link => link.InMemoryPath)
+            .Concat(_cachedPackageTextureOptions ??= _packageTextureOptions())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
