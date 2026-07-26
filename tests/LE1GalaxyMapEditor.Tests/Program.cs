@@ -104,6 +104,7 @@ internal static class Program
         OptimizationRegressionTests.Register(Run);
         PhaseZeroDataSafetyTests.Register(Run);
         PhaseOneLifecycleTests.Register(Run);
+        GalaxyMapIdentityContractTests.Register(Run);
         Run("Refactor: edit transaction rollback and history contract", EditTransactionRollbackAndHistoryContract);
         Run("Refactor: merged table projection follows the editor session", TableProjectionFollowsEditorSession);
         Run("2DA dirty highlights clear after commit", TableDirtyHighlightsClearAfterCommit);
@@ -1540,6 +1541,15 @@ internal static class Program
         NotNull(decoded, "retained non-game background texture loads");
         Equal(PixelFormats.Bgr32, decoded!.Format, "decoded textures ignore source alpha");
         True(decoded.IsFrozen, "decoded texture is safe to share across threads");
+        True(textures.CanDecodeImageBytes(
+                File.ReadAllBytes(Path.Combine(FindTextureDirectory(), "stars_bg.jpg"))),
+            "validation uses the production decoder without requiring a cache key");
+        True(!textures.CanDecodeImageBytes([0, 1, 2, 3]),
+            "validation rejects bytes the production decoder cannot read");
+        True(GalaxyMapTextureService.IsSupportedImagePath("preview.TIFF"),
+            "texture staging shares its supported extension set");
+        True(!GalaxyMapTextureService.IsSupportedImagePath("preview.dds"),
+            "unsupported staging extension is rejected");
         True(ReferenceEquals(
                 decoded,
                 textures.LoadTextureBytes(
@@ -2692,6 +2702,8 @@ internal static class Program
                 "vanilla-range Cluster labels are rejected even when the number is a gap");
             True(prompted.Validate("Cluster100") is not null, "Cluster100 is rejected by the prompt");
             True(prompted.Validate("Cluster03") is not null, "mounted Cluster collisions are rejected by the prompt");
+            True(prompted.Validate(" Cluster51 ") is not null,
+                "surrounding whitespace is deliberately rejected by the authoring prompt");
             True(prompted.Validate("Cluster51") is null, "another unused coordinated Cluster label is accepted");
             Equal("Cluster50", viewModel.Document!.ClustersByRowId[100].Label,
                 "chosen Cluster label is used for the new row");

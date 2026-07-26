@@ -19,11 +19,6 @@ public sealed class PlanetTextureWorkflow(
     private readonly Dictionary<string, PlanetTexturePreviewSource> _previewSources =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff"
-    };
-
     public WorkflowResult Stage(
         Planet planet,
         GalaxyMapModule target,
@@ -50,8 +45,8 @@ public sealed class PlanetTextureWorkflow(
         {
             var contents = File.ReadAllBytes(request.SourcePath);
             var fileName = Path.GetFileName(request.SourcePath);
-            if (!SupportedExtensions.Contains(Path.GetExtension(fileName)) ||
-                textures.LoadTextureBytes($"validate:{target.Tag}:planet:{Guid.NewGuid():N}", contents) is null)
+            if (!GalaxyMapTextureService.IsSupportedImagePath(fileName) ||
+                !textures.CanDecodeImageBytes(contents))
             {
                 throw new InvalidOperationException("Choose a valid PNG, JPEG, BMP, GIF, or TIFF image.");
             }

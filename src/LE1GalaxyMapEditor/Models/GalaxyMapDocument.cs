@@ -1,9 +1,8 @@
 using System.Collections.ObjectModel;
-using System.Text.RegularExpressions;
 
 namespace LE1GalaxyMapEditor.Models;
 
-public sealed partial class GalaxyMapDocument
+public sealed class GalaxyMapDocument
 {
     public string SourceFolder { get; internal set; } = string.Empty;
     public bool IsSourceReadOnly => true;
@@ -35,24 +34,26 @@ public sealed partial class GalaxyMapDocument
     {
         code = 0;
         error = string.Empty;
-        var match = ClusterLabelPattern().Match(cluster.Label);
-        if (!match.Success || !int.TryParse(match.Groups["number"].Value, out var suffix))
+        var parsed = GalaxyMapIdentity.ParseLabelSyntax(
+            cluster.Label, GalaxyMapIdentityKind.Cluster);
+        if (parsed.Status == GalaxyMapLabelParseStatus.Malformed)
         {
             error = $"Cluster label '{cluster.Label}' does not end in a numeric Cluster code.";
             return false;
         }
 
-        if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
+        if (parsed.Status == GalaxyMapLabelParseStatus.NumericOverflow ||
+            !GalaxyMapIdentity.IsValidExistingSuffix(GalaxyMapIdentityKind.Cluster, parsed.Suffix))
         {
             error = $"Cluster label '{cluster.Label}' is too large to encode as a Relay endpoint.";
             return false;
         }
 
-        code = suffix * 10_000;
+        _ = GalaxyMapIdentity.TryEncodeClusterRelayEndpoint(cluster.Label, out var relayCode);
+        code = relayCode;
         var matches = Clusters.Count(candidate =>
-            ClusterLabelPattern().Match(candidate.Label) is { Success: true } candidateMatch &&
-            int.TryParse(candidateMatch.Groups["number"].Value, out var candidateSuffix) &&
-            candidateSuffix == suffix);
+            GalaxyMapIdentity.TryEncodeClusterRelayEndpoint(candidate.Label, out var candidateCode) &&
+            candidateCode == relayCode);
         if (matches != 1)
         {
             error = $"Cluster label code {code} is ambiguous across {matches} Clusters.";
@@ -157,20 +158,22 @@ public sealed partial class GalaxyMapDocument
         var candidates = new Dictionary<int, List<Cluster>>();
         foreach (var cluster in Clusters)
         {
-            var match = ClusterLabelPattern().Match(cluster.Label);
-            if (!match.Success || !int.TryParse(match.Groups["number"].Value, out var suffix))
+            var parsed = GalaxyMapIdentity.ParseLabelSyntax(
+                cluster.Label, GalaxyMapIdentityKind.Cluster);
+            if (parsed.Status == GalaxyMapLabelParseStatus.Malformed)
             {
                 Warnings.Add($"Cluster row {cluster.RowId} label '{cluster.Label}' cannot be used to resolve Relay endpoints.");
                 continue;
             }
 
-            if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
+            if (parsed.Status == GalaxyMapLabelParseStatus.NumericOverflow ||
+                !GalaxyMapIdentity.IsValidExistingSuffix(GalaxyMapIdentityKind.Cluster, parsed.Suffix))
             {
                 Warnings.Add($"Cluster row {cluster.RowId} label '{cluster.Label}' is too large to encode as a Relay endpoint.");
                 continue;
             }
 
-            var encoded = suffix * 10_000;
+            _ = GalaxyMapIdentity.TryEncodeClusterRelayEndpoint(cluster.Label, out var encoded);
             if (!candidates.TryGetValue(encoded, out var list))
             {
                 list = [];
@@ -205,8 +208,4 @@ public sealed partial class GalaxyMapDocument
             }
         }
     }
-
-    [GeneratedRegex("^Cluster(?<number>\\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex ClusterLabelPattern();
-
 }

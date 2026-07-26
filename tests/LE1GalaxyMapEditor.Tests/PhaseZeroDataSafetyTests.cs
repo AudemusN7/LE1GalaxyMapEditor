@@ -24,6 +24,8 @@ internal static class PhaseZeroDataSafetyTests
         run("Phase 0: CSV failure preserves retryable module state", CsvFailurePreservesRetryableState);
         run("Phase 0: manifest failure exposes completed file and CSV writes", ManifestFailureAfterEarlierWrites);
         run("Phase 0: partial multi-module commit isolates failed module", PartialMultiModuleCommitIsolation);
+        run("Phase 0: PCC partial commit is retryable", PccPartialCommitIsRetryable);
+        run("Phase 0: shader preflight preserves complete state", ShaderPreflightPreservesCompleteState);
         run("Phase 1: manifest-backed read-only metadata commits", ManifestBackedReadOnlyMetadataCommits);
         run("Phase 1: unmanifested read-only metadata waits for workspace persistence", UnmanifestedReadOnlyMetadataWaitsForWorkspacePersistence);
         run("Phase 1: workspace metadata failure isolates earlier durable writes", WorkspaceMetadataFailureIsolatesEarlierDurableWrites);
@@ -379,6 +381,162 @@ internal static class PhaseZeroDataSafetyTests
             True(!session.History.CanUndo, "fully successful retry clears history");
             Equal(revisionBefore + 2, session.Revision,
                 "fully successful retry publishes once after the partial-failure revision");
+        });
+    }
+
+    private static void PccPartialCommitIsRetryable()
+    {
+        WithTemporaryDirectory(parent =>
+        {
+            var cookedPath = Directory.CreateDirectory(Path.Combine(parent, "CookedPCConsole")).FullName;
+            var packagePath = Path.Combine(cookedPath, "GXM_Partial_Retry.pcc");
+            new GalaxyMapTemplatePackageService().Create(packagePath, []);
+            var module = new GalaxyMapModule(
+                "PCC partial retry",
+                "PCC_PARTIAL_RETRY",
+                ModuleColor.Cyan,
+                cookedPath,
+                isReadOnly: false,
+                loadOrder: 10,
+                new ModuleIdReservations(Cluster: new RowIdRange(100, 199)));
+            var pccLoader = new PccGalaxyMapLoader();
+            var layer = pccLoader.Load(packagePath, module, allowEmpty: true);
+            var workspace = new GalaxyMapWorkspace(new CsvGalaxyMapLoader().LoadBuiltInLayer(), [layer]);
+            workspace.SetActiveModule(module);
+            var session = new EditorSession(workspace);
+            var edits = new EditSessionService(session, pccWriter: new PccGalaxyMapWriter(pccLoader));
+            var key = new GalaxyMapRowKey(GalaxyMapTable.Cluster, 100);
+            var staged = edits.ExecuteMutation(new EditMutationRequest(
+                [key],
+                [GalaxyMapTable.Cluster],
+                () => new GalaxyMapRowFactory(workspace).CreateCluster(
+                    "PCC retry Cluster", 0.4, 0.6, "Cluster22"),
+                new HistoryPresentationState(key, NavigationTarget.Galaxy, module.Tag, false),
+                "created PCC retry Cluster",
+                IsStructural: true));
+            True(staged.Succeeded, "PCC fixture stages a new Cluster");
+
+            var pendingPath = Path.Combine(cookedPath, "textures", "pcc-before-failure.bin");
+            edits.StageFile(new PendingFileWrite(
+                module.Tag,
+                "textures/pcc-before-failure.bin",
+                [4, 2, 4, 2],
+                "PCC partial boundary",
+                key));
+            var packageBefore = File.ReadAllBytes(packagePath);
+            var revisionBefore = session.Revision;
+            var compositionBefore = workspace.CompositionRevision;
+
+            WorkflowResult failed;
+            using (File.Open(packagePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                failed = edits.Commit();
+            }
+
+            True(!failed.Succeeded, "locked PCC replacement reports a partial commit");
+            SequenceEqual(new byte[] { 4, 2, 4, 2 }, File.ReadAllBytes(pendingPath),
+                "pending file is durable before PCC replacement fails");
+            SequenceEqual(packageBefore, File.ReadAllBytes(packagePath),
+                "failed PCC replacement preserves the original package bytes");
+            True(layer.Clusters.Single().CsvSnapshot!.HasChanges,
+                "failed PCC replacement leaves the new row dirty");
+            True(session.Changes.ContainsModule(module.Tag),
+                "failed PCC replacement keeps the module staged for retry");
+            True(!session.History.CanUndo,
+                "durable pending-file progress clears unsafe history");
+            Equal(revisionBefore + 1, session.Revision,
+                "partial PCC failure publishes one durable-boundary revision");
+            Equal(compositionBefore + 1, workspace.CompositionRevision,
+                "partial PCC failure recomposes exactly once");
+
+            var retried = edits.Commit();
+
+            True(retried.Succeeded, "PCC commit succeeds after the package lock is released");
+            var reloaded = pccLoader.Load(packagePath, module);
+            Equal("PCC retry Cluster", reloaded.Clusters.Single(cluster => cluster.RowId == 100).NameText,
+                "retry writes the staged PCC row");
+            True(!session.Changes.HasChanges, "successful PCC retry clears staged state");
+            True(!layer.Clusters.Single().CsvSnapshot!.HasChanges,
+                "successful PCC retry advances the physical snapshot");
+        });
+    }
+
+    private static void ShaderPreflightPreservesCompleteState()
+    {
+        WithTemporaryDirectory(parent =>
+        {
+            var folder = Directory.CreateDirectory(Path.Combine(parent, "shader-preflight")).FullName;
+            var module = new GalaxyMapModule(
+                "Shader preflight",
+                "SHADER_PREFLIGHT",
+                ModuleColor.Magenta,
+                folder,
+                isReadOnly: false,
+                loadOrder: 10,
+                ModuleIdReservations.Empty);
+            new GalaxyMapModuleManifestStore().Save(module);
+
+            var baseLayer = new CsvGalaxyMapLoader().LoadBuiltInLayer();
+            var source = baseLayer.Planets.First(PlanetAppearanceCodec.IsAppearanceCapable);
+            var physical = (Planet)GalaxyMapRowCloner.CloneForOverride(source, module);
+            physical.SetExtraField("Shader", string.Empty);
+            var layer = new GalaxyMapLayer(module);
+            layer.Upsert(physical);
+            new GalaxyMapCsvWriter().WriteTable(layer, GalaxyMapTable.Planet);
+
+            var workspace = new GalaxyMapWorkspace(baseLayer, [layer]);
+            workspace.SetActiveModule(module);
+            var session = new EditorSession(workspace);
+            var edits = new EditSessionService(session);
+            var staged = edits.ExecuteMutation(new EditMutationRequest(
+                [physical.Key],
+                [GalaxyMapTable.Planet],
+                () =>
+                {
+                    physical.SetExtraField("Shader", string.Empty);
+                    physical.CsvSnapshot!.MarkDirty("Shader");
+                },
+                new HistoryPresentationState(physical.Key, NavigationTarget.Galaxy, module.Tag, true),
+                "staged invalid Shader",
+                IsStructural: false));
+            True(staged.Succeeded, "shader fixture stages an appearance edit");
+
+            edits.MarkMetadataDirty(module);
+            edits.StageWorkspaceModuleAdded(module);
+            var pendingPath = Path.Combine(folder, "textures", "shader-guard.bin");
+            Directory.CreateDirectory(Path.GetDirectoryName(pendingPath)!);
+            File.WriteAllBytes(pendingPath, [1, 3, 3, 7]);
+            edits.StageFile(new PendingFileWrite(
+                module.Tag,
+                "textures/shader-guard.bin",
+                [9, 9, 9],
+                "shader preflight boundary",
+                physical.Key));
+
+            var changesBefore = session.Changes.Capture();
+            var historyBefore = session.History.Capture();
+            var revisionBefore = session.Revision;
+            var compositionBefore = workspace.CompositionRevision;
+            var diskBefore = CaptureFiles(
+                Path.Combine(folder, GalaxyMapModuleManifestStore.FileName),
+                Path.Combine(folder, "GalaxyMap_Planet_part.csv"),
+                pendingPath);
+
+            var rejected = edits.Commit();
+
+            True(!rejected.Succeeded &&
+                 rejected.Message.Contains("unique Shader", StringComparison.OrdinalIgnoreCase),
+                "shader preflight rejects the invalid appearance");
+            AssertChangeSetEqual(changesBefore, session.Changes.Capture(),
+                "shader preflight preserves the complete change set");
+            AssertHistoryEqual(historyBefore, session.History.Capture(),
+                "shader preflight preserves complete undo/redo history");
+            Equal(revisionBefore, session.Revision,
+                "shader preflight preserves the session revision");
+            Equal(compositionBefore, workspace.CompositionRevision,
+                "shader preflight performs no recomposition");
+            AssertFilesEqual(diskBefore, CaptureFiles(diskBefore.Keys.ToArray()),
+                "shader preflight preserves every relevant disk byte");
         });
     }
 
@@ -792,6 +950,78 @@ internal static class PhaseZeroDataSafetyTests
             "successful retry recomposes a clean effective snapshot");
     }
 
+    private static IReadOnlyDictionary<string, byte[]> CaptureFiles(params string[] paths)
+        => paths.ToDictionary(
+            Path.GetFullPath,
+            path => File.ReadAllBytes(path),
+            StringComparer.OrdinalIgnoreCase);
+
+    private static void AssertFilesEqual(
+        IReadOnlyDictionary<string, byte[]> expected,
+        IReadOnlyDictionary<string, byte[]> actual,
+        string description)
+    {
+        SequenceEqual(expected.Keys.Order(StringComparer.OrdinalIgnoreCase),
+            actual.Keys.Order(StringComparer.OrdinalIgnoreCase), description);
+        foreach (var path in expected.Keys)
+        {
+            SequenceEqual(expected[path], actual[path], $"{description}: {path}");
+        }
+    }
+
+    private static void AssertChangeSetEqual(
+        EditChangeSetSnapshot expected,
+        EditChangeSetSnapshot actual,
+        string description)
+    {
+        SequenceEqual(
+            expected.DirtyTables
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => $"{pair.Key}:{string.Join(',', pair.Value.Order())}"),
+            actual.DirtyTables
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => $"{pair.Key}:{string.Join(',', pair.Value.Order())}"),
+            $"{description}: dirty tables");
+        SequenceEqual(expected.DirtyModuleMetadata.Order(StringComparer.OrdinalIgnoreCase),
+            actual.DirtyModuleMetadata.Order(StringComparer.OrdinalIgnoreCase),
+            $"{description}: dirty metadata");
+        var expectedFiles = expected.PendingFiles
+            .OrderBy(file => file.ModuleTag, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var actualFiles = actual.PendingFiles
+            .OrderBy(file => file.ModuleTag, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        Equal(expectedFiles.Length, actualFiles.Length, $"{description}: pending-file count");
+        for (var index = 0; index < expectedFiles.Length; index++)
+        {
+            var left = expectedFiles[index];
+            var right = actualFiles[index];
+            Equal(left.ModuleTag, right.ModuleTag, $"{description}: pending module");
+            Equal(left.RelativePath, right.RelativePath, $"{description}: pending path");
+            Equal(left.Purpose, right.Purpose, $"{description}: pending purpose");
+            Equal(left.RelatedRow, right.RelatedRow, $"{description}: pending row");
+            Equal(left.CacheKey, right.CacheKey, $"{description}: pending cache key");
+            SequenceEqual(left.Contents, right.Contents, $"{description}: pending contents");
+        }
+        SequenceEqual(
+            expected.WorkspaceModuleChanges
+                .OrderBy(change => change.FolderPath, StringComparer.OrdinalIgnoreCase),
+            actual.WorkspaceModuleChanges
+                .OrderBy(change => change.FolderPath, StringComparer.OrdinalIgnoreCase),
+            $"{description}: workspace changes");
+    }
+
+    private static void AssertHistoryEqual(
+        EditHistorySnapshot expected,
+        EditHistorySnapshot actual,
+        string description)
+    {
+        SequenceEqual(expected.Undo, actual.Undo, $"{description}: undo stack");
+        SequenceEqual(expected.Redo, actual.Redo, $"{description}: redo stack");
+    }
+
     private static string LoadManifestName(string folder)
         => new GalaxyMapModuleManifestStore().Load(folder).Name;
 
@@ -868,7 +1098,7 @@ internal static class PhaseZeroDataSafetyTests
         }
     }
 
-    private static void Equal<T>(T expected, T actual, string description) where T : notnull
+    private static void Equal<T>(T expected, T actual, string description)
     {
         if (!EqualityComparer<T>.Default.Equals(expected, actual))
         {

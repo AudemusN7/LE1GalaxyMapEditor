@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using LE1GalaxyMapEditor.Models;
 
 namespace LE1GalaxyMapEditor.Services;
@@ -9,7 +8,7 @@ namespace LE1GalaxyMapEditor.Services;
 /// Layer checks catch unsafe CSV/range collisions; document checks deliberately run only
 /// after composition so DLC rows may reference BASEGAME or lower mounted modules.
 /// </summary>
-public sealed partial class GalaxyMapValidator
+public sealed class GalaxyMapValidator
 {
     private static readonly string[] PackedPlanetAppearanceColumns = PlanetAppearanceSchema.Properties
         .Where(property => property.Editor == PlanetAppearanceEditorKind.PackedColor)
@@ -409,7 +408,9 @@ public sealed partial class GalaxyMapValidator
             ValidateCoordinate(cluster, cluster.Y, "Y", diagnostics);
             ValidatePositiveFinite(cluster, cluster.SphereSize, nameof(Cluster.SphereSize), diagnostics);
 
-            if (!TryParseLabelSuffix(cluster.Label, "Cluster", out var suffix))
+            var parsed = GalaxyMapIdentity.ParseLabelSyntax(
+                cluster.Label, GalaxyMapIdentityKind.Cluster);
+            if (parsed.Status == GalaxyMapLabelParseStatus.Malformed)
             {
                 AddForRow(diagnostics, cluster, "LABEL-CLUSTER", ValidationSeverity.Error,
                     $"Label '{cluster.Label}' must use the form ClusterNN so Relay and ActiveWorld codes can resolve.",
@@ -417,7 +418,9 @@ public sealed partial class GalaxyMapValidator
                 continue;
             }
 
-            if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
+            if (parsed.Status == GalaxyMapLabelParseStatus.NumericOverflow ||
+                !GalaxyMapIdentity.IsValidExistingSuffix(
+                    GalaxyMapIdentityKind.Cluster, parsed.Suffix))
             {
                 AddForRow(diagnostics, cluster, "LABEL-CLUSTER-RANGE", ValidationSeverity.Error,
                     "A Cluster label suffix must be in the game-supported range 1-99.",
@@ -425,6 +428,7 @@ public sealed partial class GalaxyMapValidator
                 continue;
             }
 
+            var suffix = parsed.Suffix;
             if (codes.TryGetValue(suffix, out var existing))
             {
                 AddForRow(diagnostics, cluster, "LABEL-CLUSTER-DUPLICATE", ValidationSeverity.Error,
@@ -461,7 +465,9 @@ public sealed partial class GalaxyMapValidator
                     nameof(GalaxySystem.ClusterRowId));
             }
 
-            if (!TryParseLabelSuffix(system.Label, "System", out var suffix))
+            var parsed = GalaxyMapIdentity.ParseLabelSyntax(
+                system.Label, GalaxyMapIdentityKind.System);
+            if (parsed.Status == GalaxyMapLabelParseStatus.Malformed)
             {
                 AddForRow(diagnostics, system, "LABEL-SYSTEM", ValidationSeverity.Error,
                     $"Label '{system.Label}' must use the form SystemNN for ActiveWorld encoding.",
@@ -469,7 +475,17 @@ public sealed partial class GalaxyMapValidator
                 continue;
             }
 
-            if (suffix is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel)
+            if (parsed.Status == GalaxyMapLabelParseStatus.NumericOverflow)
+            {
+                AddForRow(diagnostics, system, "LABEL-SYSTEM-RANGE", ValidationSeverity.Error,
+                    "A System label suffix must be in the game-supported range 1-9 (System01-System09).",
+                    nameof(GalaxySystem.Label));
+                continue;
+            }
+
+            var suffix = parsed.Suffix;
+            if (!GalaxyMapIdentity.IsValidExistingSuffix(
+                    GalaxyMapIdentityKind.System, suffix))
             {
                 AddForRow(diagnostics, system, "LABEL-SYSTEM-RANGE", ValidationSeverity.Error,
                     "A System label suffix must be in the game-supported range 1-9 (System01-System09).",
@@ -624,15 +640,25 @@ public sealed partial class GalaxyMapValidator
                     column);
             }
 
-            if (!TryParseLabelSuffix(planet.Label, "Planet", out var planetSuffix))
+            var parsed = GalaxyMapIdentity.ParseLabelSyntax(
+                planet.Label, GalaxyMapIdentityKind.Planet);
+            if (parsed.Status == GalaxyMapLabelParseStatus.Malformed)
             {
                 AddForRow(diagnostics, planet, "LABEL-PLANET", ValidationSeverity.Error,
                     $"Label '{planet.Label}' must use the form PlanetNN for ActiveWorld encoding.",
                     nameof(Planet.Label));
             }
+            else if (parsed.Status == GalaxyMapLabelParseStatus.NumericOverflow)
+            {
+                AddForRow(diagnostics, planet, "LABEL-PLANET-RANGE", ValidationSeverity.Error,
+                    "A Planet label suffix must fit the positive two-digit ActiveWorld segment (1-99).",
+                    nameof(Planet.Label));
+            }
             else
             {
-                if (planetSuffix is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel)
+                var planetSuffix = parsed.Suffix;
+                if (!GalaxyMapIdentity.IsValidExistingSuffix(
+                        GalaxyMapIdentityKind.Planet, planetSuffix))
                 {
                     AddForRow(diagnostics, planet, "LABEL-PLANET-RANGE", ValidationSeverity.Error,
                         "A Planet label suffix must fit the positive two-digit ActiveWorld segment (1-99).",
@@ -675,21 +701,11 @@ public sealed partial class GalaxyMapValidator
         ICollection<ValidationDiagnostic> diagnostics)
     {
         if (system is null || !clusters.TryGetValue(system.ClusterRowId, out var cluster) ||
-            !TryParseLabelSuffix(cluster.Label, "Cluster", out var clusterSuffix) ||
-            !TryParseLabelSuffix(system.Label, "System", out var systemSuffix) ||
-            clusterSuffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel ||
-            systemSuffix is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
-            planetSuffix is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel)
+            !GalaxyMapIdentity.IsValidExistingSuffix(
+                GalaxyMapIdentityKind.Planet, planetSuffix) ||
+            !GalaxyMapIdentity.TryDeriveActiveWorld(
+                cluster.Label, system.Label, planet.Label, out var expected))
         {
-            return;
-        }
-
-        var expected = ((long)clusterSuffix * 10_000) + ((long)systemSuffix * 100) + planetSuffix;
-        if (expected > GalaxyMapIdentityLimits.MaxActiveWorld)
-        {
-            AddForRow(diagnostics, planet, "ACTIVEWORLD-RANGE", ValidationSeverity.Error,
-                $"The label chain produces an ActiveWorld value above the game-supported maximum {GalaxyMapIdentityLimits.MaxActiveWorld}.",
-                nameof(Planet.ActiveWorld));
             return;
         }
 
@@ -823,13 +839,11 @@ public sealed partial class GalaxyMapValidator
         var clusterCodes = new Dictionary<int, List<Cluster>>();
         foreach (var cluster in clusters)
         {
-            if (!TryParseLabelSuffix(cluster.Label, "Cluster", out var suffix) ||
-                suffix is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel)
+            if (!GalaxyMapIdentity.TryEncodeClusterRelayEndpoint(cluster.Label, out var code))
             {
                 continue;
             }
 
-            var code = suffix * 10_000;
             if (!clusterCodes.TryGetValue(code, out var matching))
             {
                 matching = [];
@@ -972,20 +986,6 @@ public sealed partial class GalaxyMapValidator
         return result;
     }
 
-    private static bool TryParseLabelSuffix(string label, string prefix, out int suffix)
-    {
-        suffix = 0;
-        if (string.IsNullOrWhiteSpace(label))
-        {
-            return false;
-        }
-
-        var match = EncodedLabelPattern().Match(label);
-        return match.Success &&
-               string.Equals(match.Groups["prefix"].Value, prefix, StringComparison.OrdinalIgnoreCase) &&
-               int.TryParse(match.Groups["number"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out suffix);
-    }
-
     private static void AddForRow(
         ICollection<ValidationDiagnostic> diagnostics,
         GalaxyMapRow row,
@@ -1012,6 +1012,4 @@ public sealed partial class GalaxyMapValidator
             .ThenBy(diagnostic => diagnostic.Code, StringComparer.Ordinal)
             .ToArray();
 
-    [GeneratedRegex("^(?<prefix>[A-Za-z]+)(?<number>\\d+)$", RegexOptions.CultureInvariant)]
-    private static partial Regex EncodedLabelPattern();
 }

@@ -97,12 +97,15 @@ public sealed class MainInspectorPresentationWorkflow(
                 .ToArray() ?? [],
             InspectorOptionSet.Maps => MapOptions(),
             InspectorOptionSet.RelayClusters => session.Document?.Clusters
-                .Select(cluster => (Cluster: cluster, Valid: TryLabelSuffix(cluster.Label, "Cluster", out var suffix), Suffix: suffix))
-                .Where(item => item.Valid && item.Suffix is > 0 and <= GalaxyMapIdentityLimits.MaxClusterLabel)
+                .Select(cluster => (
+                    Cluster: cluster,
+                    Valid: GalaxyMapIdentity.TryEncodeClusterRelayEndpoint(cluster.Label, out var encoded),
+                    Encoded: encoded))
+                .Where(item => item.Valid)
                 .OrderBy(item => item.Cluster.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .Select(item => new InspectorFieldOption(
-                    (item.Suffix * 10_000).ToString(CultureInfo.InvariantCulture),
-                    $"{item.Cluster.DisplayName} • {item.Suffix * 10_000}"))
+                    item.Encoded.ToString(CultureInfo.InvariantCulture),
+                    $"{item.Cluster.DisplayName} • {item.Encoded}"))
                 .ToArray() ?? [],
             _ => []
         };
@@ -240,10 +243,4 @@ public sealed class MainInspectorPresentationWorkflow(
         }
     }
 
-    private static bool TryLabelSuffix(string label, string prefix, out int suffix)
-    {
-        suffix = 0;
-        return label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
-               int.TryParse(label[prefix.Length..], NumberStyles.None, CultureInfo.InvariantCulture, out suffix);
-    }
 }

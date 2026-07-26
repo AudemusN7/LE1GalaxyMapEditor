@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.3.0-beta.1 — 22 July 2026
+
 ### PCC authoring with Legendary Explorer Core
 
 - Replaced the loose `_part.csv` authoring workflow with direct loading and writing of LE1 galaxy-map PCC exports through Legendary Explorer Core.

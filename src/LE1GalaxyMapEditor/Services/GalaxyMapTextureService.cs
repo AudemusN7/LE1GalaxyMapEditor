@@ -17,6 +17,11 @@ public sealed partial class GalaxyMapTextureService
     public const string GalaxyTextureReference = "BIOA_GalaxyMap_T.galaxy";
     public const string SystemTextureReference = "BIOA_GalaxyMap_T.stars01";
     private const int MaximumCachedTextures = 6;
+    private static IReadOnlySet<string> SupportedImageExtensions { get; } =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff"
+        };
 
     private readonly Action<string, TimeSpan>? _decodeObserver;
     private readonly Dictionary<string, CacheEntry> _cache =
@@ -209,6 +214,18 @@ public sealed partial class GalaxyMapTextureService
         return LoadCached($"memory:{cacheKey}", () => new MemoryStream(contents, writable: false));
     }
 
+    internal bool CanDecodeImageBytes(byte[] contents)
+    {
+        ArgumentNullException.ThrowIfNull(contents);
+        return DecodeTexture(
+            () => new MemoryStream(contents, writable: false),
+            observerKey: null) is not null;
+    }
+
+    internal static bool IsSupportedImagePath(string path)
+        => !string.IsNullOrWhiteSpace(path) &&
+           SupportedImageExtensions.Contains(Path.GetExtension(path));
+
     public static string? ResolveModuleTexturePath(GalaxyMapModule module, string relativePath)
     {
         if (module.FolderPath is null || string.IsNullOrWhiteSpace(relativePath) || Path.IsPathRooted(relativePath))
@@ -290,34 +307,8 @@ public sealed partial class GalaxyMapTextureService
             }
         }
 
-        BitmapSource? texture;
-        var decodeClock = Stopwatch.StartNew();
-        try
-        {
-            using var stream = openStream();
-            if (stream is null)
-            {
-                return null;
-            }
-
-            var decoded = BitmapFrame.Create(
-                stream,
-                BitmapCreateOptions.PreservePixelFormat,
-                BitmapCacheOption.OnLoad);
-
-            // Bgr32 deliberately has no alpha channel. WPF retains the original
-            // hidden RGB bytes while treating every pixel as fully opaque.
-            texture = new FormatConvertedBitmap(decoded, PixelFormats.Bgr32, null, 0);
-            texture.Freeze();
-            decodeClock.Stop();
-            _decodeObserver?.Invoke(cacheKey, decodeClock.Elapsed);
-        }
-        catch (Exception exception) when (exception is IOException
-                                           or UnauthorizedAccessException
-                                           or FileFormatException
-                                           or NotSupportedException
-                                           or InvalidOperationException
-                                           or ArgumentException)
+        var texture = DecodeTexture(openStream, cacheKey);
+        if (texture is null)
         {
             return null;
         }
@@ -341,6 +332,44 @@ public sealed partial class GalaxyMapTextureService
         }
 
         return texture;
+    }
+
+    private BitmapSource? DecodeTexture(Func<Stream?> openStream, string? observerKey)
+    {
+        var decodeClock = Stopwatch.StartNew();
+        try
+        {
+            using var stream = openStream();
+            if (stream is null)
+            {
+                return null;
+            }
+
+            var decoded = BitmapFrame.Create(
+                stream,
+                BitmapCreateOptions.PreservePixelFormat,
+                BitmapCacheOption.OnLoad);
+
+            // Bgr32 deliberately has no alpha channel. WPF retains the original
+            // hidden RGB bytes while treating every pixel as fully opaque.
+            var texture = new FormatConvertedBitmap(decoded, PixelFormats.Bgr32, null, 0);
+            texture.Freeze();
+            decodeClock.Stop();
+            if (observerKey is not null)
+            {
+                _decodeObserver?.Invoke(observerKey, decodeClock.Elapsed);
+            }
+            return texture;
+        }
+        catch (Exception exception) when (exception is IOException
+                                           or UnauthorizedAccessException
+                                           or FileFormatException
+                                           or NotSupportedException
+                                           or InvalidOperationException
+                                           or ArgumentException)
+        {
+            return null;
+        }
     }
 
     private bool TryGetCached(string cacheKey, out BitmapSource? texture)

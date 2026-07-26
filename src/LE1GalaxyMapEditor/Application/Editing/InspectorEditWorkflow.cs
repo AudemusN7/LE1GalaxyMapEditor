@@ -447,7 +447,10 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
                     UpdatePlanetIdentity(planet, newLabel, system.Label, planet.Label);
                 }
 
-                var newCode = checked(newClusterNumber * 10_000);
+                if (!GalaxyMapIdentity.TryEncodeClusterRelayEndpoint(newLabel, out var newCode))
+                {
+                    return new InspectorEditResult(false);
+                }
                 foreach (var sourceRelay in document.Relays.Where(relay =>
                              relay.StartCluster?.RowId == effectiveCluster.RowId ||
                              relay.EndCluster?.RowId == effectiveCluster.RowId))
@@ -603,8 +606,14 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
     public static bool TryLabelSuffix(string label, string prefix, out int suffix)
     {
         suffix = 0;
-        return label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
-               int.TryParse(label[prefix.Length..], NumberStyles.None, CultureInfo.InvariantCulture, out suffix);
+        if (!Enum.TryParse<GalaxyMapIdentityKind>(prefix, ignoreCase: true, out var kind))
+        {
+            return false;
+        }
+
+        var parsed = GalaxyMapIdentity.ParseLabelSyntax(label, kind);
+        suffix = parsed.Suffix;
+        return parsed.Status == GalaxyMapLabelParseStatus.Parsed;
     }
 
     public static bool IsPlotPlanetMirrorField(string propertyName)
@@ -643,9 +652,8 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
         }
 
         return document.Clusters.Count(cluster =>
-            TryLabelSuffix(cluster.Label, "Cluster", out var suffix) &&
-            suffix is > 0 and <= GalaxyMapIdentityLimits.MaxClusterLabel &&
-            suffix * 10_000 == encoded) == 1;
+            GalaxyMapIdentity.TryEncodeClusterRelayEndpoint(cluster.Label, out var clusterCode) &&
+            clusterCode == encoded) == 1;
     }
 
     private static bool ValuesEqual(object? left, object? right)
@@ -658,24 +666,6 @@ public sealed class InspectorEditWorkflow(EditorSession session, EditSessionServ
         string systemLabel,
         string planetLabel,
         out int activeWorld)
-    {
-        activeWorld = 0;
-        if (!TryLabelSuffix(clusterLabel, "Cluster", out var cluster) ||
-            cluster is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel ||
-            !TryLabelSuffix(systemLabel, "System", out var system) ||
-            system is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
-            !TryLabelSuffix(planetLabel, "Planet", out var planet) ||
-            planet is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel)
-        {
-            return false;
-        }
-
-        var calculated = (long)cluster * 10_000 + system * 100L + planet;
-        if (calculated > GalaxyMapIdentityLimits.MaxActiveWorld)
-        {
-            return false;
-        }
-        activeWorld = (int)calculated;
-        return true;
-    }
+        => GalaxyMapIdentity.TryDeriveActiveWorld(
+            clusterLabel, systemLabel, planetLabel, out activeWorld);
 }

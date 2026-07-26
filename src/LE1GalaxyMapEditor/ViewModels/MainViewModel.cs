@@ -837,7 +837,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         string? ValidateLabel(string candidate)
         {
-            candidate = candidate.Trim();
             if (!InspectorEditWorkflow.TryLabelSuffix(candidate, "Cluster", out var suffix) ||
                 suffix is < GalaxyMapIdentityLimits.MinAuthoredClusterLabel or > GalaxyMapIdentityLimits.MaxClusterLabel ||
                 !string.Equals(candidate, $"Cluster{suffix:D2}", StringComparison.OrdinalIgnoreCase))
@@ -873,7 +872,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        ApplyMutationResult(_rowAuthoring.CreateCluster(label.Trim(), CaptureHistoryPresentation()));
+        ApplyMutationResult(_rowAuthoring.CreateCluster(label, CaptureHistoryPresentation()));
     }
 
     private bool CanAddForCurrentView() => HasActiveModule && CurrentViewModel switch

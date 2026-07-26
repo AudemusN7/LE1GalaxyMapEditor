@@ -16,11 +16,6 @@ public sealed class ClusterTextureWorkflow(
     EditSessionService edits,
     GalaxyMapTextureService textures)
 {
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff"
-    };
-
     public WorkflowResult Stage(
         Cluster cluster,
         GalaxyMapModule target,
@@ -37,8 +32,8 @@ public sealed class ClusterTextureWorkflow(
         {
             var contents = File.ReadAllBytes(sourcePath);
             var fileName = Path.GetFileName(sourcePath);
-            if (!SupportedExtensions.Contains(Path.GetExtension(fileName)) ||
-                textures.LoadTextureBytes($"validate:{target.Tag}:{cluster.RowId}:{Guid.NewGuid():N}", contents) is null)
+            if (!GalaxyMapTextureService.IsSupportedImagePath(fileName) ||
+                !textures.CanDecodeImageBytes(contents))
             {
                 throw new InvalidOperationException("Choose a valid PNG, JPEG, BMP, GIF, or TIFF image.");
             }

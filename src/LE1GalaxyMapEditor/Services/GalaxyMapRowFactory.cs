@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using LE1GalaxyMapEditor.Models;
 
 namespace LE1GalaxyMapEditor.Services;
@@ -9,7 +8,7 @@ namespace LE1GalaxyMapEditor.Services;
 /// separate from copy-on-write overrides: every ID allocated here must be unused
 /// and inside the module's reservation for its table.
 /// </summary>
-public sealed partial class GalaxyMapRowFactory
+public sealed class GalaxyMapRowFactory
 {
     private static readonly HashSet<string> ClusterColumns = Fields(
         "Label", "X", "Y", "Name", "NameText", "SphereSize", "Background");
@@ -136,25 +135,9 @@ public sealed partial class GalaxyMapRowFactory
     {
         ArgumentNullException.ThrowIfNull(system);
         activeWorld = 0;
-        if (system.Cluster is not { } cluster ||
-            !TryLabelNumber(cluster.Label, "Cluster", out var clusterNumber) ||
-            !TryLabelNumber(system.Label, "System", out var systemNumber) ||
-            !TryLabelNumber(planetLabel, "Planet", out var planetNumber))
-        {
-            return false;
-        }
-
-        var value = ((long)clusterNumber * 10_000) + ((long)systemNumber * 100) + planetNumber;
-        if (clusterNumber is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel ||
-            systemNumber is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
-            planetNumber is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel ||
-            value is <= 0 or > GalaxyMapIdentityLimits.MaxActiveWorld)
-        {
-            return false;
-        }
-
-        activeWorld = (int)value;
-        return true;
+        return system.Cluster is { } cluster &&
+               GalaxyMapIdentity.TryDeriveActiveWorld(
+                   cluster.Label, system.Label, planetLabel, out activeWorld);
     }
 
     private T AddNewRow<T>(
@@ -223,7 +206,8 @@ public sealed partial class GalaxyMapRowFactory
     private int NextClusterLabelNumber(int preferredRowId)
     {
         var used = LabelNumbers(
-            _workspace.Layers.SelectMany(layer => layer.Clusters).Select(cluster => cluster.Label), "Cluster");
+            _workspace.Layers.SelectMany(layer => layer.Clusters).Select(cluster => cluster.Label),
+            GalaxyMapIdentityKind.Cluster);
         if (preferredRowId is >= GalaxyMapIdentityLimits.MinAuthoredClusterLabel and <= GalaxyMapIdentityLimits.MaxClusterLabel &&
             !used.Contains(preferredRowId))
         {
@@ -238,16 +222,22 @@ public sealed partial class GalaxyMapRowFactory
     }
 
     private static int NextScopedLabelNumber(IEnumerable<string> labels, string prefix)
-        => NextAvailable(LabelNumbers(labels, prefix), 1, GalaxyMapIdentityLimits.MaxLabel(prefix), prefix);
+    {
+        var kind = IdentityKind(prefix);
+        return NextAvailable(LabelNumbers(labels, kind), 1, GalaxyMapIdentityLimits.MaxLabel(kind), prefix);
+    }
 
-    private static HashSet<int> LabelNumbers(IEnumerable<string> labels, string prefix)
+    private static HashSet<int> LabelNumbers(
+        IEnumerable<string> labels,
+        GalaxyMapIdentityKind kind)
     {
         var used = new HashSet<int>();
         foreach (var label in labels)
         {
-            if (TryLabelNumber(label, prefix, out var number))
+            var parsed = GalaxyMapIdentity.ParseLabelSyntax(label, kind);
+            if (parsed.Status == GalaxyMapLabelParseStatus.Parsed && parsed.Suffix > 0)
             {
-                used.Add(number);
+                used.Add(parsed.Suffix);
             }
         }
 
@@ -256,13 +246,20 @@ public sealed partial class GalaxyMapRowFactory
 
     private int ValidateNewClusterLabel(string label)
     {
-        if (!TryLabelNumber(label.Trim(), "Cluster", out var number) ||
+        var parsed = GalaxyMapIdentity.ParseLabelSyntax(label, GalaxyMapIdentityKind.Cluster);
+        var number = parsed.Suffix;
+        if (parsed.Status != GalaxyMapLabelParseStatus.Parsed ||
             number is < GalaxyMapIdentityLimits.MinAuthoredClusterLabel or > GalaxyMapIdentityLimits.MaxClusterLabel)
         {
             throw new InvalidOperationException("New module Clusters must use a label from Cluster22 to Cluster99.");
         }
         if (_workspace.Layers.SelectMany(layer => layer.Clusters).Any(cluster =>
-                TryLabelNumber(cluster.Label, "Cluster", out var existing) && existing == number))
+            {
+                var existing = GalaxyMapIdentity.ParseLabelSyntax(
+                    cluster.Label, GalaxyMapIdentityKind.Cluster);
+                return existing.Status == GalaxyMapLabelParseStatus.Parsed &&
+                       existing.Suffix == number;
+            }))
         {
             throw new InvalidOperationException($"Cluster{number:D2} is already used by a mounted module.");
         }
@@ -282,15 +279,10 @@ public sealed partial class GalaxyMapRowFactory
             $"No {prefix} label is available in the supported {prefix}{minimum:D2}-{prefix}{maximum:D2} range.");
     }
 
-    private static bool TryLabelNumber(string label, string prefix, out int number)
-    {
-        number = 0;
-        var match = NumberedLabelPattern().Match(label ?? string.Empty);
-        return match.Success &&
-               string.Equals(match.Groups["prefix"].Value, prefix, StringComparison.OrdinalIgnoreCase) &&
-               int.TryParse(match.Groups["number"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out number) &&
-               number > 0;
-    }
+    private static GalaxyMapIdentityKind IdentityKind(string prefix)
+        => Enum.TryParse<GalaxyMapIdentityKind>(prefix, ignoreCase: true, out var kind)
+            ? kind
+            : throw new ArgumentOutOfRangeException(nameof(prefix), prefix, "Unknown galaxy-map label prefix.");
 
     private static string FormatLabel(string prefix, int number)
         => $"{prefix}{number.ToString(number < 100 ? "D2" : "D", CultureInfo.InvariantCulture)}";
@@ -368,7 +360,4 @@ public sealed partial class GalaxyMapRowFactory
     private static string Integer(int value) => value.ToString(CultureInfo.InvariantCulture);
     private static string NullableInteger(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
-    [GeneratedRegex("^(?<prefix>Cluster|System|Planet)(?<number>\\d+)$",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex NumberedLabelPattern();
 }

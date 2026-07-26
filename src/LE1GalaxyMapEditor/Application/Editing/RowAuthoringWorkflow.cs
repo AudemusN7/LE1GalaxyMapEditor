@@ -733,7 +733,7 @@ public sealed class RowAuthoringWorkflow(
 
     private static int DeriveActiveWorld(string? cluster, string? system, string planet)
     {
-        if (TryCalculateActiveWorld(cluster ?? string.Empty, system ?? string.Empty, planet, out var activeWorld))
+        if (GalaxyMapIdentity.TryDeriveActiveWorld(cluster, system, planet, out var activeWorld))
         {
             return activeWorld;
         }
@@ -782,34 +782,20 @@ public sealed class RowAuthoringWorkflow(
         string systemLabel,
         string planetLabel,
         out int activeWorld)
-    {
-        activeWorld = 0;
-        if (!TryLabelSuffix(clusterLabel, "Cluster", out var clusterNumber) ||
-            clusterNumber is <= 0 or > GalaxyMapIdentityLimits.MaxClusterLabel ||
-            !TryLabelSuffix(systemLabel, "System", out var systemNumber) ||
-            systemNumber is <= 0 or > GalaxyMapIdentityLimits.MaxSystemLabel ||
-            !TryLabelSuffix(planetLabel, "Planet", out var planetNumber) ||
-            planetNumber is <= 0 or > GalaxyMapIdentityLimits.MaxPlanetLabel)
-        {
-            return false;
-        }
-
-        try
-        {
-            activeWorld = checked(clusterNumber * 10_000 + systemNumber * 100 + planetNumber);
-            return activeWorld <= GalaxyMapIdentityLimits.MaxActiveWorld;
-        }
-        catch (OverflowException)
-        {
-            return false;
-        }
-    }
+        => GalaxyMapIdentity.TryDeriveActiveWorld(
+            clusterLabel, systemLabel, planetLabel, out activeWorld);
 
     private static bool TryLabelSuffix(string label, string prefix, out int suffix)
     {
         suffix = 0;
-        return label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
-               int.TryParse(label[prefix.Length..], out suffix);
+        if (!Enum.TryParse<GalaxyMapIdentityKind>(prefix, ignoreCase: true, out var kind))
+        {
+            return false;
+        }
+
+        var parsed = GalaxyMapIdentity.ParseLabelSyntax(label, kind);
+        suffix = parsed.Suffix;
+        return parsed.Status == GalaxyMapLabelParseStatus.Parsed;
     }
 
     private static void SetCoordinates(GalaxyMapRow row, double x, double y)
