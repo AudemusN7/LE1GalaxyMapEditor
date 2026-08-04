@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.3.1 — 4 August 2026
+
+- Promoted the PCC-authoring release to stable after the 1.3 beta.
+- Improved Cluster, System and Planet label validation, including globally unique Cluster-label selection and ActiveWorld limits.
+- Strengthened editing, undo/redo, discard, refresh and shutdown behaviour to preserve unsaved work safely.
+- Improved workspace and module staging, commit previews, diagnostics and external-file safety.
+- Refined map visuals, coordinate labels, relay and orbit rendering, planet glyph detection and custom texture handling.
+- Expanded regression, lifecycle and data-safety coverage.
+
 ## 1.3.0-beta.1 — 22 July 2026
 
 ### PCC authoring with Legendary Explorer Core
