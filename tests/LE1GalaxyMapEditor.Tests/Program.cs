@@ -276,6 +276,54 @@ internal static class Program
             new GalaxyMapTemplatePackageService().Create(emptyPath, []);
             var emptyLayer = new PccGalaxyMapLoader().Load(emptyPath, module, allowEmpty: true);
             Equal(0, emptyLayer.Schemas.Count, "blank reservations create no partial 2DAs");
+
+            var addedMap = new MapEntry
+            {
+                RowId = 1000,
+                MapName = "BIOA_SCHEMA_TEST",
+                StartPoint = "start_schema_test"
+            };
+            GalaxyMapRowAuthoring.PrepareNewRow(layer, addedMap);
+            layer.Add(addedMap);
+            NotNull(layer.GetSchema(GalaxyMapTable.Map)!.SourceIdentity,
+                "new row preserves the PCC-backed table identity");
+            new PccGalaxyMapWriter().WriteTables(layer, [GalaxyMapTable.Map]);
+            using (var committedPackage = MEPackageHandler.OpenLE1Package(packagePath, forceLoadFromDisk: true))
+            {
+                Equal(1, committedPackage.Exports.Count(export =>
+                        !export.IsDefaultObject &&
+                        string.Equals(export.ClassName, "Bio2DANumberedRows", StringComparison.Ordinal) &&
+                        string.Equals(export.ObjectName.Name, "GalaxyMap_Map_part", StringComparison.OrdinalIgnoreCase)),
+                    "adding a Map row does not import a duplicate PCC export");
+            }
+
+            Throws<InvalidOperationException>(
+                () => layer.SetSchema(CsvGalaxyMapLoader.GetCanonicalSchema(GalaxyMapTable.Map)),
+                message => message.Contains("cannot be replaced", StringComparison.OrdinalIgnoreCase),
+                "a physical source identity cannot be silently erased");
+
+            var identityFallbackLayer = new GalaxyMapLayer(module);
+            identityFallbackLayer.SetSchema(CsvGalaxyMapLoader.GetCanonicalSchema(GalaxyMapTable.Map));
+            identityFallbackLayer.SetPackageSource(packagePath, layer.SourcePackageFingerprint!);
+            var fallbackMap = new MapEntry
+            {
+                RowId = 1001,
+                MapName = "BIOA_IDENTITY_FALLBACK",
+                StartPoint = "start_identity_fallback"
+            };
+            GalaxyMapRowAuthoring.PrepareNewRow(identityFallbackLayer, fallbackMap);
+            identityFallbackLayer.Add(fallbackMap);
+            new PccGalaxyMapWriter().WriteTables(identityFallbackLayer, [GalaxyMapTable.Map]);
+
+            var fallbackReloaded = new PccGalaxyMapLoader().Load(packagePath, module);
+            Equal("BIOA_IDENTITY_FALLBACK", fallbackReloaded.Maps.Single().MapName,
+                "writer reuses the physical export when in-memory identity is unavailable");
+            using var fallbackPackage = MEPackageHandler.OpenLE1Package(packagePath, forceLoadFromDisk: true);
+            Equal(1, fallbackPackage.Exports.Count(export =>
+                    !export.IsDefaultObject &&
+                    string.Equals(export.ClassName, "Bio2DANumberedRows", StringComparison.Ordinal) &&
+                    string.Equals(export.ObjectName.Name, "GalaxyMap_Map_part", StringComparison.OrdinalIgnoreCase)),
+                "identity fallback cannot create a duplicate PCC export");
         });
     }
 

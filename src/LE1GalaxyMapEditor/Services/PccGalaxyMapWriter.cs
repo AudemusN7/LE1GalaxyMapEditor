@@ -61,16 +61,16 @@ public sealed class PccGalaxyMapWriter
                     }
                     else
                     {
-                        export = ImportTemplateExport(package, table);
+                        export = ResolveSupportedExport(package, table) ?? ImportTemplateExport(package, table);
                         identity = new GalaxyMapTableSourceIdentity(
                             packagePath,
                             export.ObjectName.Name,
                             export.ClassName);
-                        var canonical = CsvGalaxyMapLoader.GetCanonicalSchema(table);
+                        var fallback = schema ?? CsvGalaxyMapLoader.GetCanonicalSchema(table);
                         schema = new CsvTableSchema(
                             table,
-                            canonical.Headers,
-                            canonical.DefaultCellTypes,
+                            fallback.Headers,
+                            fallback.DefaultCellTypes,
                             identity);
                     }
                     var source = new Bio2DA(export);
@@ -164,6 +164,23 @@ public sealed class PccGalaxyMapWriter
         }
 
         return importedExport;
+    }
+
+    private static ExportEntry? ResolveSupportedExport(IMEPackage package, GalaxyMapTable table)
+    {
+        var exportName = PccGalaxyMapLoader.SupportedExports[table];
+        var matches = package.Exports.Where(export =>
+            !export.IsDefaultObject &&
+            string.Equals(export.ClassName, "Bio2DANumberedRows", StringComparison.Ordinal) &&
+            string.Equals(export.ObjectName.Name, exportName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return matches.Length switch
+        {
+            0 => null,
+            1 => matches[0],
+            _ => throw new InvalidOperationException(
+                $"The PCC contains multiple Bio2DANumberedRows exports named '{exportName}'.")
+        };
     }
 
     private static SerializedTable SerializeTable(
