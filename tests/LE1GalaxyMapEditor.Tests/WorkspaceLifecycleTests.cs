@@ -10,23 +10,21 @@ using LE1GalaxyMapEditor.Workflows.Ports;
 namespace LE1GalaxyMapEditor.Tests;
 
 /// <summary>
-/// Lifecycle gates for the phase-one single-transition reload and shutdown-only
-/// abandon paths. These tests intentionally observe publications, document
-/// attachments, composition, deferred work, and object identity independently.
+/// Workspace startup, refresh, discard and shutdown lifecycle contracts.
 /// </summary>
-internal static class PhaseOneLifecycleTests
+internal static class WorkspaceLifecycleTests
 {
     public static void Register(Action<string, Action> run)
     {
-        run("Phase 1: remembered startup is one session transition", RememberedStartupIsOneTransition);
-        run("Phase 1: startup loader cannot replace a live session", StartupLoaderCannotReplaceLiveSession);
-        run("Phase 1: ordinary discard reloads once", OrdinaryDiscardReloadsOnce);
-        run("Phase 1: rejected discard preserves the live session", RejectedDiscardPreservesLiveSession);
-        run("Phase 1: clean refresh follows externally updated workspace", CleanRefreshFollowsUpdatedWorkspace);
-        run("Phase 1: shutdown discard abandons without refresh", ShutdownDiscardAbandonsWithoutRefresh);
-        run("Phase 1: missing remembered module retains BASEGAME and diagnostics", MissingModuleRetainsBaseGameAndDiagnostics);
-        run("Phase 1: corrupt startup settings produce structured fallback", CorruptStartupSettingsProduceStructuredFallback);
-        run("Phase 1: reference-folder diagnostics follow the active source", ReferenceFolderDiagnosticsFollowActiveSource);
+        run("Remembered startup is one session transition", RememberedStartupIsOneTransition);
+        run("Startup loader cannot replace a live session", StartupLoaderCannotReplaceLiveSession);
+        run("Ordinary discard reloads once", OrdinaryDiscardReloadsOnce);
+        run("Rejected discard preserves the live session", RejectedDiscardPreservesLiveSession);
+        run("Clean refresh follows externally updated workspace", CleanRefreshFollowsUpdatedWorkspace);
+        run("Shutdown discard abandons without refresh", ShutdownDiscardAbandonsWithoutRefresh);
+        run("Missing remembered module retains BASEGAME and diagnostics", MissingModuleRetainsBaseGameAndDiagnostics);
+        run("Corrupt startup settings produce structured fallback", CorruptStartupSettingsProduceStructuredFallback);
+        run("Reference-folder diagnostics follow the active source", ReferenceFolderDiagnosticsFollowActiveSource);
     }
 
     private static void RememberedStartupIsOneTransition()

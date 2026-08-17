@@ -86,7 +86,7 @@ The named `ChromeButtonStyle` controls standard buttons. `MainWindow.xaml` conta
 - `InspectorTextBoxStyle`
 - `InspectorActionButtonStyle`
 
-Be careful when changing a `ControlTemplate`: it controls behaviour and hit-testing as well as appearance. Palette, padding and font changes are low-risk; structural template changes should be followed by the headless checks.
+Be careful when changing a `ControlTemplate`: it controls behaviour and hit-testing as well as appearance. The WPF smoke tests verify that the application and primary navigation views still compose; they deliberately do not freeze decorative dimensions or colours.
 
 ## Checking a change
 
@@ -94,7 +94,7 @@ From the project folder:
 
 ```powershell
 dotnet build LE1GalaxyMapEditor.sln -c Release --no-restore
-dotnet run --project tests\LE1GalaxyMapEditor.Tests\LE1GalaxyMapEditor.Tests.csproj -c Release --no-build
+dotnet test tests\LE1GalaxyMapEditor.Tests\LE1GalaxyMapEditor.Tests.csproj -c Release --no-build --filter TestCategory=Wpf
 ```
 
 If the build says the executable is in use, close the running editor and repeat the command.

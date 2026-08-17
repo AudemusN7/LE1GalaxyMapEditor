@@ -8,26 +8,23 @@ using LE1GalaxyMapEditor.ViewModels;
 namespace LE1GalaxyMapEditor.Tests;
 
 /// <summary>
-/// Focused regression coverage for the optimisation pass. These checks deliberately
-/// exercise observable contracts rather than implementation details so composition,
-/// validation, snapshots and loading can be made incremental without changing results.
+/// Core composition, validation, snapshot and loading contracts.
 /// </summary>
-internal static class OptimizationRegressionTests
+internal static class CoreRegressionTests
 {
-    public static void Register(Action<string, Action> run)
+    public static void Register(Action<string, Action> fast)
     {
-        PhaseZeroRefreshAndTableTests.Register(run);
-        run("Optimisation: deterministic override order", DeterministicOverrideOrder);
-        run("Optimisation: reservations and allocator boundaries", ReservationsAndAllocatorBoundaries);
-        run("Optimisation: partial CSV failure isolation", PartialCsvFailureIsolation);
-        run("Optimisation: failed atomic replacement preserves commit", FailedAtomicReplacementPreservesCommit);
-        run("Optimisation: shared links survive recomposition", SharedLinksSurviveRecomposition);
-        run("Optimisation: Relay and ActiveWorld encoding boundaries", RelayAndActiveWorldEncodingBoundaries);
-        run("Optimisation: corrupt workspace settings are contained", CorruptWorkspaceSettingsAreContained);
-        run("Optimisation: layer clones are isolated", LayerClonesAreIsolated);
-        run("Optimisation: CSV snapshots share no dirty state", CsvSnapshotsShareNoDirtyState);
-        run("Optimisation: module-tag suggestions follow the domain invariant", ModuleTagSuggestionsFollowDomainInvariant);
-        run("Optimisation: appearance metadata follows the explicit schema", AppearanceMetadataFollowsExplicitSchema);
+        fast("Deterministic override order", DeterministicOverrideOrder);
+        fast("Reservations and allocator boundaries", ReservationsAndAllocatorBoundaries);
+        fast("Partial CSV failure isolation", PartialCsvFailureIsolation);
+        fast("Failed atomic replacement preserves commit", FailedAtomicReplacementPreservesCommit);
+        fast("Shared links survive recomposition", SharedLinksSurviveRecomposition);
+        fast("Relay and ActiveWorld encoding boundaries", RelayAndActiveWorldEncodingBoundaries);
+        fast("Corrupt workspace settings are contained", CorruptWorkspaceSettingsAreContained);
+        fast("Layer clones are isolated", LayerClonesAreIsolated);
+        fast("CSV snapshots share no dirty state", CsvSnapshotsShareNoDirtyState);
+        fast("Module-tag suggestions follow the domain invariant", ModuleTagSuggestionsFollowDomainInvariant);
+        fast("Appearance metadata follows the explicit schema", AppearanceMetadataFollowsExplicitSchema);
     }
 
     private static void DeterministicOverrideOrder()
@@ -67,9 +64,9 @@ internal static class OptimizationRegressionTests
 
         var diagnostics = new GalaxyMapValidator().Validate(workspace);
         Equal(1, diagnostics.Count(item => item.Code == "ID-BASEGAME-OVERRIDE"),
-            "first module override is informational");
-        Equal(1, diagnostics.Count(item => item.Code == "ID-MODULE-OVERRIDE"),
-            "higher module override is informational");
+            "active module override is informational");
+        Equal(0, diagnostics.Count(item => item.Code == "ID-MODULE-OVERRIDE"),
+            "inactive module override does not clutter editing diagnostics");
         True(diagnostics.All(item => item.Code != "ID-OUTSIDE-RESERVATION" && item.Code != "ID-NO-RESERVATION"),
             "same-ID overrides do not require a new-row reservation");
     }
@@ -290,7 +287,7 @@ internal static class OptimizationRegressionTests
             workspace.Recompose();
         }
 
-        var diagnostics = new GalaxyMapValidator().Validate(workspace);
+        var diagnostics = new GalaxyMapValidator().Validate(workspace.EffectiveDocument);
         Equal(1, diagnostics.Count(item => item.Code == "MAP-SHARED" && item.RowId == 5 &&
                                     item.Severity == ValidationSeverity.Info),
             "shared Map relationship is reported once");

@@ -32,7 +32,7 @@ public sealed class GalaxyMapValidator
         ValidateModuleRanges(workspace, diagnostics);
         ValidateLayers(workspace, diagnostics);
         ValidateEffectiveDocument(workspace.EffectiveDocument, diagnostics, validateCollectionOrder: false);
-        return Order(diagnostics);
+        return Order(FocusOnActiveEdit(workspace, diagnostics));
     }
 
     public IReadOnlyList<ValidationDiagnostic> Validate(GalaxyMapDocument document)
@@ -41,6 +41,24 @@ public sealed class GalaxyMapValidator
         var diagnostics = new List<ValidationDiagnostic>();
         ValidateEffectiveDocument(document, diagnostics, validateCollectionOrder: true);
         return Order(diagnostics);
+    }
+
+    private static IEnumerable<ValidationDiagnostic> FocusOnActiveEdit(
+        GalaxyMapWorkspace workspace,
+        IEnumerable<ValidationDiagnostic> diagnostics)
+    {
+        var activeTag = workspace.ActiveModule?.Tag;
+        foreach (var diagnostic in diagnostics)
+        {
+            // Unsafe output matters across the mounted stack. Advice is useful only
+            // for the module being edited; inherited quirks are otherwise just noise.
+            if (diagnostic.Severity == ValidationSeverity.Error ||
+                (!string.IsNullOrWhiteSpace(activeTag) &&
+                 string.Equals(diagnostic.ModuleTag, activeTag, StringComparison.OrdinalIgnoreCase)))
+            {
+                yield return diagnostic;
+            }
+        }
     }
 
     private static void ValidateModuleRanges(
@@ -548,39 +566,6 @@ public sealed class GalaxyMapValidator
                     nameof(Planet.OrbitRing));
             }
 
-            if (planet.OrbitRing == 2 && (planet.SystemLevelType != 0 || planet.PlanetLevelType != 0))
-            {
-                AddForRow(diagnostics, planet, "TYPE-ASTEROID-BELT-COMBINATION", ValidationSeverity.Warning,
-                    "Vanilla asteroid belts use SystemLevelType 0 and PlanetLevelType 0.",
-                    nameof(Planet.OrbitRing));
-            }
-
-            if (planet.OrbitRing == 2)
-            {
-                foreach (var functionName in new[] { "VisibleFunction", "UsableFunction", "UsablePlanetFunction" })
-                {
-                    if (planet.ExtraFields.TryGetValue(functionName, out var function) && function != "975")
-                    {
-                        AddForRow(diagnostics, planet, "TYPE-ASTEROID-BELT-RULE", ValidationSeverity.Warning,
-                            $"All vanilla asteroid belts use function 975 for {functionName}; another value may expose the belt anchor.",
-                            functionName);
-                    }
-                }
-            }
-
-            if (planet.SystemLevelType == 2 && planet.OrbitRing != 1)
-            {
-                AddForRow(diagnostics, planet, "TYPE-RINGED-PLANET-ORBIT", ValidationSeverity.Warning,
-                    "A ringed planet normally uses OrbitRing 1.", nameof(Planet.OrbitRing));
-            }
-
-            if (planet.SystemLevelType == 1 && planet.PlanetLevelType is not 2 and not 4)
-            {
-                AddForRow(diagnostics, planet, "TYPE-ANOMALY-SELECTION", ValidationSeverity.Warning,
-                    "Anomalies and ships normally use PlanetLevelType 2; Citadel uses the special value 4.",
-                    nameof(Planet.PlanetLevelType));
-            }
-
             if (planet.SystemLevelType is < 0 or > 5)
             {
                 AddForRow(diagnostics, planet, "TYPE-SYSTEM-LEVEL", ValidationSeverity.Warning,
@@ -605,13 +590,6 @@ public sealed class GalaxyMapValidator
                 AddForRow(diagnostics, planet, "TYPE-PLANET-LEVEL-BROKEN", ValidationSeverity.Warning,
                     $"PlanetLevelType {planet.PlanetLevelType} is recognised by the schema but is known to be broken in LE1.",
                     nameof(Planet.PlanetLevelType));
-            }
-
-            if (planet.SystemLevelType != 2 && planet.RingColor != -1)
-            {
-                AddForRow(diagnostics, planet, "TYPE-RING-COLOR-NONRINGED", ValidationSeverity.Warning,
-                    "RingColor should be -1 unless SystemLevelType is 2 (ringed planet).",
-                    nameof(Planet.RingColor));
             }
 
             if (planet.RingColor is < int.MinValue or > uint.MaxValue)

@@ -49,7 +49,9 @@ Validation covers areas including:
 - Relay endpoints and duplicate connections;
 - PlanetLevelType values known not to work correctly in LE1.
 
-The panel checks both individual module rows and the effective map. A lower-priority problem can therefore remain listed even when a higher module supplies a valid effective value.
+Errors cover the complete mounted stack because broken relationships and unsafe output matter regardless of which module is selected. Warnings and informational messages are scoped to the active editing module, so inherited quirks and inactive-module advice do not swamp the work currently in progress.
+
+Validation distinguishes unsafe data from unusual modding choices. It checks serialisation limits, broken references and values known to fail in LE1; it does not warn merely because a valid combination differs from a conventional vanilla object.
 
 ## Manual identity repairs
 
