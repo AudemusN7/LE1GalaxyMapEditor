@@ -79,7 +79,7 @@ Invalid input stays in edit mode. The cell receives a red border and tooltip exp
 
 ## Managed and read-only columns
 
-**Row ID** is read-only in every table. Planet **ActiveWorld** is also managed by the editor rather than edited directly in the grid, as it is generated based on its System/Cluster IDs.
+**Row ID** and Planet **ActiveWorld** are managed identities and are normally read-only. When validation offers one as a manual repair, the specific affected cell is temporarily editable in both the Inspector and 2DA table; it locks again when validation confirms that the problem is resolved. A mismatched same-ID Planet/PlotPlanet relationship offers both writable Row ID cells, so either row can be reassigned without automatically changing the other or rewriting references.
 
 Use the Galaxy Map workflows to create, move or delete rows. The table view does not add/delete rows or manufacture additional columns from malformed source files.
 

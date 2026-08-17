@@ -684,7 +684,11 @@ public sealed class GalaxyMapValidator
             {
                 AddForRow(diagnostics, planet, "ACTIVEWORLD-DUPLICATE", ValidationSeverity.Error,
                     $"ActiveWorld {planet.ActiveWorld} is also used by Planet row {sameActiveWorld.RowId}.",
-                    nameof(Planet.ActiveWorld));
+                    nameof(Planet.ActiveWorld), repairTargets:
+                    [
+                        ValidationRepairTarget.For(sameActiveWorld, nameof(Planet.ActiveWorld)),
+                        ValidationRepairTarget.For(planet, nameof(Planet.ActiveWorld))
+                    ]);
             }
             else
             {
@@ -773,25 +777,31 @@ public sealed class GalaxyMapValidator
                 continue;
             }
 
+            var relationshipRepairs = new[]
+            {
+                ValidationRepairTarget.For(planet, CsvRowSnapshot.RowIdColumnName),
+                ValidationRepairTarget.For(plotPlanet, CsvRowSnapshot.RowIdColumnName)
+            };
+
             if (plotPlanet.Code != planet.ActiveWorld)
             {
                 AddForRow(diagnostics, plotPlanet, "PLOT-CODE-MISMATCH", ValidationSeverity.Error,
                     $"PlotPlanet Code {plotPlanet.Code} must equal the linked Planet's ActiveWorld {planet.ActiveWorld}.",
-                    nameof(PlotPlanetEntry.Code));
+                    nameof(PlotPlanetEntry.Code), repairTargets: relationshipRepairs);
             }
 
             if (plotPlanet.Name != planet.Name)
             {
                 AddForRow(diagnostics, plotPlanet, "PLOT-NAME-MISMATCH", ValidationSeverity.Warning,
                     $"PlotPlanet Name {plotPlanet.Name} differs from the linked Planet Name {planet.Name}.",
-                    nameof(PlotPlanetEntry.Name));
+                    nameof(PlotPlanetEntry.Name), repairTargets: relationshipRepairs);
             }
 
             if (!string.Equals(plotPlanet.NameText, planet.NameText, StringComparison.Ordinal))
             {
                 AddForRow(diagnostics, plotPlanet, "PLOT-NAMETEXT-MISMATCH", ValidationSeverity.Warning,
                     $"PlotPlanet NameText '{plotPlanet.NameText}' differs from the linked Planet '{planet.NameText}'.",
-                    nameof(PlotPlanetEntry.NameText));
+                    nameof(PlotPlanetEntry.NameText), repairTargets: relationshipRepairs);
             }
         }
     }
@@ -823,7 +833,7 @@ public sealed class GalaxyMapValidator
 
             if (references.Skip(1).Any())
             {
-                AddForRow(diagnostics, map, "MAP-SHARED", ValidationSeverity.Warning,
+                AddForRow(diagnostics, map, "MAP-SHARED", ValidationSeverity.Info,
                     $"Map row {map.RowId} is referenced by multiple Planets: " +
                     string.Join(", ", references.Select(planet => planet.RowId)) + ".",
                     "Row ID");
@@ -993,8 +1003,16 @@ public sealed class GalaxyMapValidator
         ValidationSeverity severity,
         string message,
         string column,
-        string? moduleTag = null)
-        => diagnostics.Add(new ValidationDiagnostic(
+        string? moduleTag = null,
+        IReadOnlyList<ValidationRepairTarget>? repairTargets = null)
+    {
+        if (repairTargets is null && severity == ValidationSeverity.Error &&
+            ValidationRepairPolicy.IsManagedIdentity(row, column))
+        {
+            repairTargets = [ValidationRepairTarget.For(row, column)];
+        }
+
+        diagnostics.Add(new ValidationDiagnostic(
             code,
             severity,
             message,
@@ -1002,7 +1020,9 @@ public sealed class GalaxyMapValidator
             row.Table.ToString(),
             row.RowId,
             column,
-            row.CsvSnapshot?.SourceRowNumber));
+            row.CsvSnapshot?.SourceRowNumber,
+            repairTargets));
+    }
 
     private static IReadOnlyList<ValidationDiagnostic> Order(IEnumerable<ValidationDiagnostic> diagnostics)
         => diagnostics.OrderByDescending(diagnostic => diagnostic.Severity)

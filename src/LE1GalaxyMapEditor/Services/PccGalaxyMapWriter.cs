@@ -190,7 +190,9 @@ public sealed class PccGalaxyMapWriter
         Bio2DA source,
         IMEPackage package)
     {
-        var rows = OrderedRows(layer, table);
+        // Physical source order is diagnostic input, not an authoring constraint.
+        // Every persisted table uses the same canonical numerical row order as CSV.
+        var rows = layer.Rows(table).OrderBy(row => row.RowId).ToArray();
         var duplicate = rows.GroupBy(row => row.RowId).FirstOrDefault(group => group.Count() > 1);
         if (duplicate is not null)
         {
@@ -227,21 +229,6 @@ public sealed class PccGalaxyMapWriter
         }
 
         return new SerializedTable(target, rows.Select(row => row.RowId).ToArray(), serializedRows);
-    }
-
-    private static GalaxyMapRow[] OrderedRows(GalaxyMapLayer layer, GalaxyMapTable table)
-    {
-        var rows = layer.Rows(table).ToDictionary(row => row.RowId);
-        var result = new List<GalaxyMapRow>(rows.Count);
-        foreach (var rowId in layer.GetSourceRowOrder(table))
-        {
-            if (rows.Remove(rowId, out var row))
-            {
-                result.Add(row);
-            }
-        }
-        result.AddRange(layer.Rows(table).Where(row => rows.ContainsKey(row.RowId)));
-        return result.ToArray();
     }
 
     private static GalaxyMapSourceCell SerializeCell(

@@ -291,7 +291,8 @@ internal static class OptimizationRegressionTests
         }
 
         var diagnostics = new GalaxyMapValidator().Validate(workspace);
-        Equal(1, diagnostics.Count(item => item.Code == "MAP-SHARED" && item.RowId == 5),
+        Equal(1, diagnostics.Count(item => item.Code == "MAP-SHARED" && item.RowId == 5 &&
+                                    item.Severity == ValidationSeverity.Info),
             "shared Map relationship is reported once");
     }
 

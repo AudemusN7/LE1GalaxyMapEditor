@@ -51,6 +51,14 @@ Validation covers areas including:
 
 The panel checks both individual module rows and the effective map. A lower-priority problem can therefore remain listed even when a higher module supplies a valid effective value.
 
+## Manual identity repairs
+
+Row ID and Planet ActiveWorld cells are normally managed and read-only. When a diagnostic identifies one as a valid manual repair, that specific cell temporarily unlocks in both the Inspector and 2DA table.
+
+Some relationship faults have more than one legitimate repair. For example, mismatched same-ID Planet and PlotPlanet rows unlock both writable Row IDs. The editor does not choose a side, rewrite references or copy mirrored values automatically. Correcting the relationship removes the repair offer and returns the cells to read-only.
+
+Inherited or read-only Row IDs stay locked because changing an override cannot remove the source row. Edit the module that owns the row instead.
+
 ## Correct an inline error
 
 Invalid inspector fields and 2DA cells receive a red border and explanatory tooltip.

@@ -15,6 +15,7 @@ using LE1GalaxyMapEditor;
 using LE1GalaxyMapEditor.Controls;
 using LE1GalaxyMapEditor.Converters;
 using LE1GalaxyMapEditor.Models;
+using LE1GalaxyMapEditor.Presentation;
 using LE1GalaxyMapEditor.Rendering;
 using LE1GalaxyMapEditor.Services;
 using LE1GalaxyMapEditor.ViewModels;
@@ -69,6 +70,9 @@ internal static class Program
         Run("Map markers preserve object scale while resizing", MapMarkersPreserveObjectScaleWhileResizing);
         Run("Planet templates use verified structural defaults", PlanetTemplateDefaults);
         Run("Inspector metadata and type ranges", InspectorMetadataAndTypeRanges);
+        Run("Invalid managed identities become temporarily editable", InvalidManagedIdentitiesBecomeEditable);
+        Run("PlotPlanet mismatches offer row-aware manual repairs", PlotPlanetMismatchOffersManualRepairs);
+        Run("Row ID repairs move physical identities transactionally", RowIdRepairIsTransactional);
         Run("Square viewport and coordinate grid definitions", SquareViewportAndGridDefinitions);
         Run("Texture mapping ignores PNG alpha", TextureMappingIgnoresPngAlpha);
         Run("Hierarchy navigation semantics", HierarchyNavigationSemantics);
@@ -349,7 +353,10 @@ internal static class Program
             var workspace = new GalaxyMapWorkspace(baseLayer, [layer]);
             workspace.SetActiveModule(module);
 
-            var created = new GalaxyMapRowFactory(workspace).CreateCluster("PCC Cluster", 1, 0.75);
+            var factory = new GalaxyMapRowFactory(workspace);
+            var created = factory.CreateCluster("PCC Cluster", 1, 0.75);
+            var second = factory.CreateCluster("Second PCC Cluster", 0.25, 0.5);
+            layer.SetSourceRowOrder(GalaxyMapTable.Cluster, [second.RowId, created.RowId]);
             new PccGalaxyMapWriter(loader).WriteTables(layer, [GalaxyMapTable.Cluster]);
 
             var reloaded = loader.Load(packagePath, module);
@@ -357,12 +364,12 @@ internal static class Program
                 new[] { GalaxyMapTable.Cluster },
                 reloaded.Schemas.Keys,
                 "commit imports only the newly required partial 2DA export");
-            var actual = reloaded.Clusters.Single();
+            var actual = reloaded.Clusters.Single(cluster => cluster.RowId == created.RowId);
             Equal(created.RowId, actual.RowId, "committed cluster row ID");
             Equal("PCC Cluster", actual.NameText, "committed cluster name");
             NearlyEqual(1, actual.X, "committed cluster X");
             NearlyEqual(0.75, actual.Y, "committed cluster Y");
-            True(layer.Clusters.Single().CsvSnapshot?.HasChanges == false,
+            True(created.CsvSnapshot?.HasChanges == false,
                 "committed row snapshot is clean");
             Equal(GalaxyMapCellType.Int,
                 actual.CsvSnapshot!.GetOriginalCell("X")!.Value.Type,
@@ -373,6 +380,14 @@ internal static class Program
             Equal(GalaxyMapCellType.Name,
                 actual.CsvSnapshot.GetOriginalCell("NameText")!.Value.Type,
                 "new NameText cell uses canonical PCC name type");
+            SequenceEqual(
+                new[] { created.RowId, second.RowId }.OrderBy(rowId => rowId),
+                reloaded.GetSourceRowOrder(GalaxyMapTable.Cluster),
+                "PCC commit sorts physical rows numerically");
+            SequenceEqual(
+                reloaded.GetSourceRowOrder(GalaxyMapTable.Cluster),
+                layer.GetSourceRowOrder(GalaxyMapTable.Cluster),
+                "successful PCC commit updates the live physical row order");
 
             var earth = (Planet)GalaxyMapRowCloner.CloneForOverride(
                 baseLayer.Planets.Single(planet => planet.RowId == 6),
@@ -399,8 +414,8 @@ internal static class Program
                 }
             }
 
-            layer.Clusters.Single().NameText = "Externally blocked";
-            layer.Clusters.Single().CsvSnapshot!.MarkDirty("NameText");
+            created.NameText = "Externally blocked";
+            created.CsvSnapshot!.MarkDirty("NameText");
             File.SetLastWriteTimeUtc(packagePath, File.GetLastWriteTimeUtc(packagePath).AddSeconds(2));
             Throws<InvalidOperationException>(
                 () => new PccGalaxyMapWriter(loader).WriteTables(layer, [GalaxyMapTable.Cluster]),
@@ -1508,6 +1523,226 @@ internal static class Program
         Equal("1", planet.ExtraFields["VisibleConditional"], "Always preset enables the condition");
         Equal("974", planet.ExtraFields["VisibleFunction"], "Always preset uses utility function 974");
         Equal("1", planet.ExtraFields["VisibleParameter"], "Always preset enables the independent parameter");
+    }
+
+    private static void InvalidManagedIdentitiesBecomeEditable()
+    {
+        var planet = new Planet { RowId = 99, Label = "Planet01", ActiveWorld = 7 };
+        var repairWorkflow = new RepairInspectorWorkflow("Row ID", "ActiveWorld");
+        var inspector = new PropertyInspectorViewModel(repairWorkflow);
+        inspector.Inspect(planet);
+
+        var fields = inspector.Sections.SelectMany(section => section.Fields).ToArray();
+        var rowId = fields.Single(field => field.Name == "Row ID");
+        var activeWorld = fields.Single(field => field.Name == "ActiveWorld");
+        True(rowId.IsEditable, "an erroneous Row ID is editable in the inspector");
+        True(activeWorld.IsEditable, "an erroneous ActiveWorld is editable in the inspector");
+
+        rowId.Value = "100";
+        activeWorld.Value = "10101";
+        Equal(100, planet.RowId, "Row ID repair is applied through the managed edit boundary");
+        Equal(10101, planet.ActiveWorld, "ActiveWorld repair is applied without deriving a replacement");
+
+        repairWorkflow.ClearDiagnostics();
+        inspector.Inspect(planet);
+        fields = inspector.Sections.SelectMany(section => section.Fields).ToArray();
+        True(fields.Single(field => field.Name == "Row ID").IsReadOnly,
+            "a valid Row ID returns to read-only");
+        True(fields.Single(field => field.Name == "ActiveWorld").IsReadOnly,
+            "a valid ActiveWorld returns to read-only");
+    }
+
+    private static void PlotPlanetMismatchOffersManualRepairs()
+    {
+        var baseLayer = new CsvGalaxyMapLoader().LoadBuiltInLayer();
+        var relationshipModule = new GalaxyMapModule(
+            "Relationship Repair", "RELATIONSHIP_REPAIR", ModuleColor.Magenta, folderPath: null,
+            isReadOnly: false, loadOrder: 1, TestReservations());
+        var relationshipLayer = new GalaxyMapLayer(relationshipModule);
+        relationshipLayer.SetSchema(CsvGalaxyMapLoader.GetCanonicalSchema(GalaxyMapTable.Planet));
+        relationshipLayer.SetSchema(CsvGalaxyMapLoader.GetCanonicalSchema(GalaxyMapTable.PlotPlanet));
+        var mismatchedPlanet = new Planet
+        {
+            RowId = 10000,
+            Label = "Planet98",
+            SystemRowId = 1,
+            Name = 123,
+            NameText = "Intended Planet",
+            ActiveWorld = 10198,
+            Scale = 1,
+            RingColor = -1,
+            PlanetLevelType = 1
+        };
+        var mismatchedPlot = new PlotPlanetEntry
+        {
+            RowId = 10000,
+            Code = 10197,
+            Name = 456,
+            NameText = "Wrong PlotPlanet"
+        };
+        var intendedPlanet = new Planet
+        {
+            RowId = 10002,
+            Label = "Planet97",
+            SystemRowId = 1,
+            Name = 456,
+            NameText = "Wrong PlotPlanet",
+            ActiveWorld = 10197,
+            Scale = 1,
+            RingColor = -1,
+            PlanetLevelType = 1
+        };
+        var invalidIdentityPlanet = new Planet
+        {
+            RowId = 10003,
+            Label = "Planet96",
+            SystemRowId = 1,
+            NameText = "Invalid ActiveWorld",
+            ActiveWorld = 7,
+            Scale = 1,
+            RingColor = -1,
+            PlanetLevelType = 1
+        };
+        GalaxyMapRowAuthoring.PrepareNewRow(relationshipLayer, mismatchedPlanet);
+        GalaxyMapRowAuthoring.PrepareNewRow(relationshipLayer, mismatchedPlot);
+        GalaxyMapRowAuthoring.PrepareNewRow(relationshipLayer, intendedPlanet);
+        GalaxyMapRowAuthoring.PrepareNewRow(relationshipLayer, invalidIdentityPlanet);
+        relationshipLayer.Add(mismatchedPlanet);
+        relationshipLayer.Add(mismatchedPlot);
+        relationshipLayer.Add(intendedPlanet);
+        relationshipLayer.Add(invalidIdentityPlanet);
+        var relationshipWorkspace = new GalaxyMapWorkspace(baseLayer, [relationshipLayer]);
+        relationshipWorkspace.SetActiveModule(relationshipModule);
+        var relationshipSession = new EditorSession(relationshipWorkspace);
+        var relationshipEdits = new EditSessionService(relationshipSession);
+        IReadOnlyList<ValidationDiagnostic> relationshipDiagnostics =
+            new GalaxyMapValidator().Validate(relationshipWorkspace);
+        var relationshipRepairs = new ValidationRepairPolicy(() => relationshipDiagnostics);
+        var relationshipEditWorkflow = new InspectorEditWorkflow(
+            relationshipSession, relationshipEdits, relationshipRepairs.CanRepair);
+        var presentationWorkflow = new MainInspectorPresentationWorkflow(
+            relationshipSession,
+            new RelayWorkflow(relationshipSession, relationshipEdits),
+            relationshipRepairs,
+            () => true,
+            () => { },
+            relationshipEditWorkflow.ValidateEdit,
+            (_, _, _) => false,
+            (_, _) => { });
+        var relationshipInspector = new PropertyInspectorViewModel(presentationWorkflow);
+        relationshipInspector.Inspect(relationshipWorkspace.EffectiveDocument.PlanetsByRowId[10000]);
+
+        var planetRowId = relationshipInspector.Sections.Single(section => section.Title == "Planet")
+            .Fields.Single(field => field.Name == "Row ID");
+        var plotRowId = relationshipInspector.Sections.Single(section => section.Title == "Linked PlotPlanet")
+            .Fields.Single(field => field.Name == "Row ID");
+        True(planetRowId.IsEditable,
+            "a PlotPlanet mismatch unlocks the Planet side of the shared Row ID relationship");
+        True(plotRowId.IsEditable,
+            "a PlotPlanet mismatch unlocks the PlotPlanet side of the shared Row ID relationship");
+
+        var tablePresentation = new HistoryPresentationState(
+            mismatchedPlot.Key, NavigationTarget.Galaxy, relationshipModule.Tag, true);
+        var tableViewer = new TableViewerViewModel(
+            new TableProjectionService(relationshipSession),
+            (key, column, token) => relationshipEditWorkflow.ApplyTableCellEdit(
+                (GalaxyMapRow)relationshipWorkspace.Resolve(key)!,
+                column,
+                token,
+                relationshipModule,
+                tablePresentation),
+            () => true,
+            relationshipRepairs);
+        tableViewer.SelectedTable = GalaxyMapTable.Planet;
+        var tableRowIdColumn = tableViewer.Columns.ToList().FindIndex(column =>
+            column.Name == CsvRowSnapshot.RowIdColumnName);
+        var planetTableRow = tableViewer.Rows.Single(row => row.Key == mismatchedPlanet.Key);
+        True(!tableViewer.IsCellReadOnly(planetTableRow, tableRowIdColumn),
+            "the 2DA Planet Row ID cell unlocks for the relationship repair");
+        var planetSideRepair = tableViewer.CommitCellEdit(planetTableRow, tableRowIdColumn, "10001");
+        True(planetSideRepair.Succeeded,
+            "the 2DA table can choose the Planet side of the ambiguous Row ID repair");
+        NotNull(relationshipLayer.Find(new GalaxyMapRowKey(GalaxyMapTable.Planet, 10001)),
+            "the Planet-side choice stages the Planet under its selected ID");
+        True(relationshipEdits.Undo(tablePresentation).Succeeded,
+            "the Planet-side repair participates in shared undo history");
+        relationshipWorkspace = relationshipSession.Workspace!;
+        relationshipModule = relationshipSession.ActiveModule!;
+        relationshipLayer = relationshipWorkspace.ActiveLayer!;
+        relationshipDiagnostics = new GalaxyMapValidator().Validate(relationshipWorkspace);
+        tableViewer.RefreshIfNeeded(force: true);
+
+        var activeWorldColumn = tableViewer.Columns.ToList().FindIndex(column =>
+            column.Name == nameof(Planet.ActiveWorld));
+        var invalidIdentityTableRow = tableViewer.Rows.Single(row => row.Key == invalidIdentityPlanet.Key);
+        True(!tableViewer.IsCellReadOnly(invalidIdentityTableRow, activeWorldColumn),
+            "the 2DA ActiveWorld cell unlocks when validation marks that identity invalid");
+        var activeWorldRepair = tableViewer.CommitCellEdit(
+            invalidIdentityTableRow, activeWorldColumn, "10196");
+        True(activeWorldRepair.Succeeded, "the 2DA table can manually repair ActiveWorld");
+        Equal(10196, relationshipSession.Workspace!.EffectiveDocument.PlanetsByRowId[10003].ActiveWorld,
+            "the table stages the manually selected ActiveWorld without deriving another value");
+
+        tableViewer.SelectedTable = GalaxyMapTable.PlotPlanet;
+        var plotTableRow = tableViewer.Rows.Single(row => row.Key == mismatchedPlot.Key);
+        True(!tableViewer.IsCellReadOnly(plotTableRow, tableRowIdColumn),
+            "the 2DA PlotPlanet Row ID cell unlocks for the relationship repair");
+        var tableRepair = tableViewer.CommitCellEdit(plotTableRow, tableRowIdColumn, "10002");
+        True(tableRepair.Succeeded, "the 2DA table can re-key the mismatched PlotPlanet manually");
+        NotNull(relationshipLayer.Find(new GalaxyMapRowKey(GalaxyMapTable.PlotPlanet, 10002)),
+            "the table repair stages the PlotPlanet under its intended ID");
+
+        relationshipDiagnostics = new GalaxyMapValidator().Validate(relationshipWorkspace);
+        tableViewer.RefreshIfNeeded(force: true);
+        var repairedPlotTableRow = tableViewer.Rows.Single(row =>
+            row.Key == new GalaxyMapRowKey(GalaxyMapTable.PlotPlanet, 10002));
+        True(tableViewer.IsCellReadOnly(repairedPlotTableRow, tableRowIdColumn),
+            "the corrected 2DA PlotPlanet Row ID cell returns to read-only");
+        tableViewer.SelectedTable = GalaxyMapTable.Planet;
+        var repairedIdentityTableRow = tableViewer.Rows.Single(row => row.Key == invalidIdentityPlanet.Key);
+        True(tableViewer.IsCellReadOnly(repairedIdentityTableRow, activeWorldColumn),
+            "the corrected 2DA ActiveWorld cell returns to read-only");
+    }
+
+    private static void RowIdRepairIsTransactional()
+    {
+        var baseLayer = new CsvGalaxyMapLoader().LoadBuiltInLayer();
+        var module = new GalaxyMapModule(
+            "Identity Repair", "IDENTITY_REPAIR", ModuleColor.Cyan, folderPath: null,
+            isReadOnly: false, loadOrder: 1, TestReservations());
+        var layer = new GalaxyMapLayer(module);
+        layer.SetSchema(CsvGalaxyMapLoader.GetCanonicalSchema(GalaxyMapTable.Cluster));
+        var invalidCluster = new Cluster
+        {
+            RowId = 999,
+            Label = "Cluster98",
+            NameText = "Repair me",
+            SphereSize = 1
+        };
+        GalaxyMapRowAuthoring.PrepareNewRow(layer, invalidCluster);
+        layer.Add(invalidCluster);
+        var workspace = new GalaxyMapWorkspace(baseLayer, [layer]);
+        workspace.SetActiveModule(module);
+        var session = new EditorSession(workspace);
+        var edits = new EditSessionService(session);
+        var editWorkflow = new InspectorEditWorkflow(session, edits);
+        var inspected = workspace.EffectiveDocument.ClustersByRowId[999];
+        var edit = editWorkflow.ApplyEdit(
+            inspected,
+            nameof(GalaxyMapRow.RowId),
+            100,
+            module,
+            new HistoryPresentationState(inspected.Key, NavigationTarget.Galaxy, module.Tag, true));
+
+        True(edit.Handled && edit.Result?.Succeeded == true, "Row ID repair is a managed transaction");
+        True(layer.Find(new GalaxyMapRowKey(GalaxyMapTable.Cluster, 999)) is null,
+            "Row ID repair removes the invalid physical key");
+        var repaired = layer.Find(new GalaxyMapRowKey(GalaxyMapTable.Cluster, 100));
+        NotNull(repaired, "Row ID repair inserts the corrected physical key");
+        True(repaired!.CsvSnapshot!.IsDirty(CsvRowSnapshot.RowIdColumnName),
+            "Row ID repair marks the unnamed CSV identity column dirty");
+        Equal(new GalaxyMapRowKey(GalaxyMapTable.Cluster, 100), edit.Result!.SelectionKey!.Value,
+            "Row ID repair navigates to the corrected key");
     }
 
     private static void SquareViewportAndGridDefinitions()
@@ -4692,5 +4927,30 @@ internal static class Program
         }
 
         throw new InvalidOperationException($"{description}: expected {typeof(TException).Name} with a matching message.");
+    }
+
+    private sealed class RepairInspectorWorkflow(params string[] invalidColumns) : IInspectorPresentationWorkflow
+    {
+        private readonly HashSet<string> _invalidColumns = new(invalidColumns, StringComparer.OrdinalIgnoreCase);
+
+        public bool CanEdit => true;
+        public bool CanRepairIdentity(GalaxyMapRow row, string columnName)
+            => _invalidColumns.Contains(columnName);
+        public void ClearDiagnostics() => _invalidColumns.Clear();
+        public void BeginEdit() { }
+        public string? ValidateEdit(GalaxyMapRow row, string propertyName, object? value) => null;
+        public bool ApplyManagedEdit(GalaxyMapRow row, string propertyName, object? value)
+        {
+            if (propertyName != nameof(GalaxyMapRow.RowId))
+            {
+                return false;
+            }
+
+            row.RowId = Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            return true;
+        }
+        public IReadOnlyList<InspectorFieldOption> GetOptions(InspectorOptionSet optionSet) => [];
+        public IReadOnlyList<InspectorActionDescriptor> GetActions(GalaxyMapRow row) => [];
+        public void ExecuteAction(GalaxyMapRow row, InspectorActionDescriptor action) { }
     }
 }

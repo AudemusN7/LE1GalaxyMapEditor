@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.4.0-beta.1 — 17 August 2026
+
+- Fixed an issue where Row ID and ActiveWorld cells could not be corrected after failing validation because they are normally read-only and managed by the editor. Affected cells now temporarily unlock for manual intervention.
+- Fixed a bug that could cause the editor to create a duplicate 2DA export instead of appending to an existing one, then fail to commit the changes.
+- Changed shared Map validation from a warning to diagnostic information because sharing a Map across multiple entries is legitimate base-game behaviour, such as the multiple instances of X57 in Bring Down the Sky.
+- Fixed an issue where Row IDs were sometimes not sorted numerically when committed.
+- Fixed various UI handling issues when editing in the 2DA Table.
 
 ## 1.3.1 — 4 August 2026
 

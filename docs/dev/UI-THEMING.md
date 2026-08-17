@@ -1,5 +1,7 @@
 # UI theming guide
 
+For a full visual-system analysis and a practical hand-off for reskinning another WPF application, see [WPF-UI-AESTHETICS.md](WPF-UI-AESTHETICS.md).
+
 Most application-wide colours and fonts live near the top of:
 
 `src/LE1GalaxyMapEditor/App.xaml`
@@ -96,4 +98,3 @@ dotnet run --project tests\LE1GalaxyMapEditor.Tests\LE1GalaxyMapEditor.Tests.csp
 ```
 
 If the build says the executable is in use, close the running editor and repeat the command.
-

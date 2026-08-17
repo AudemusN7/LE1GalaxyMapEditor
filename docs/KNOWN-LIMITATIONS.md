@@ -28,7 +28,7 @@ Only a Relay owned solely by the active writable module can be broken. An BASEGA
 ## 2DA Table Editor
 
 - Rows cannot be added or deleted directly in the grid.
-- Row IDs and managed relationship fields are read-only.
+- Row IDs and ActiveWorld are normally read-only. Validation can temporarily unlock a specific affected cell in both the Inspector and 2DA table for manual repair. Planet/PlotPlanet content mismatches offer both writable sides of their shared Row ID relationship.
 - Structural editing must use the Galaxy Map workflows.
 
 ## Planet Designer
