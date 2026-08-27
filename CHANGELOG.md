@@ -2,11 +2,19 @@
 
 ## 1.4.0 — 27 August 2026
 
-- Fixed an issue where Row ID and ActiveWorld cells could not be corrected after failing validation because they are normally read-only and managed by the editor. Affected cells now temporarily unlock for manual intervention.
-- Fixed a bug that could cause the editor to create a duplicate 2DA export instead of appending to an existing one, then fail to commit the changes.
-- Changed shared Map validation from a warning to diagnostic information because sharing a Map across multiple entries is legitimate base-game behaviour, such as the multiple instances of X57 in Bring Down the Sky.
-- Fixed an issue where Row IDs were sometimes not sorted numerically when committed.
+### Fixes
+
+- Row ID and ActiveWorld cells that fail validation now temporarily unlock for manual repair in the Inspector and 2DA Table.
+- Fixed duplicate 2DA exports being created instead of updating an existing export, which could prevent changes from being committed.
+- Shared Map rows are now reported as diagnostic information rather than warnings because this is legitimate base-game behaviour, including the multiple X57 entries in Bring Down the Sky.
+- Newly created system object templates now default to having no interaction button
+- Row IDs are now sorted numerically when committed.
 - Fixed various UI handling issues when editing in the 2DA Table.
+
+### Requirements
+
+- Windows 10 or Windows 11, 64-bit.
+- .NET 10 Desktop Runtime.
 
 ## 1.3.1 — 4 August 2026
 
